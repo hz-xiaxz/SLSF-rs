@@ -63,7 +63,7 @@ pub fn generate_layer_disorder_values(
     disorder_seed: u64,
 ) -> Result<Vec<f64>, String> {
     let mut lattice = ThetaLattice::new(1, 1, l_z)?;
-    let mut rng = ChaCha8Rng::seed_from_u64(disorder_seed);
+    let mut rng = FastRng::seed_from_u64(disorder_seed);
     initialize_disorder(
         &mut lattice,
         &Parameters::new(1.0, j_z_mean, delta_j_z, 1.0),
@@ -93,7 +93,7 @@ pub(crate) fn run_theta_task_with_checkpoint(
         None => initialize_disorder(
             &mut lattice,
             &params,
-            &mut ChaCha8Rng::seed_from_u64(task.disorder_seed),
+            &mut FastRng::seed_from_u64(task.disorder_seed),
         )?,
     }
     if lattice.j_z.iter().any(|&j| j < 0.0) {
@@ -102,7 +102,7 @@ pub(crate) fn run_theta_task_with_checkpoint(
         );
     }
 
-    let mut rng = ChaCha8Rng::seed_from_u64(task.seed);
+    let mut rng = FastRng::seed_from_u64(task.seed);
     let mut thermalization_start = 0usize;
     let mut measurement_start = 0usize;
     let mut acceptance_sum = 0.0;
@@ -123,7 +123,7 @@ pub(crate) fn run_theta_task_with_checkpoint(
         }
         lattice.theta = state.theta;
         lattice.j_z = state.j_z;
-        rng.set_word_pos(state.rng_word_pos);
+        rng.set_position(state.rng_word_pos);
         thermalization_start = state.thermalization_sweeps.min(task.thermalization);
         measurement_start = state.measurement_sweeps.min(task.sweeps);
         acceptance_sum = state.acceptance_sum;
@@ -245,7 +245,7 @@ pub(crate) fn run_theta_task_with_checkpoint(
             task_index,
             theta: lattice.theta.clone(),
             j_z: lattice.j_z.clone(),
-            rng_word_pos: rng.get_word_pos(),
+            rng_word_pos: rng.position(),
             thermalization_sweeps: task.thermalization,
             measurement_sweeps: task.sweeps,
             acceptance_sum,
@@ -267,7 +267,7 @@ pub(crate) fn run_theta_task_with_checkpoint(
         measurement_samples,
         final_theta: lattice.theta.clone(),
         final_j_z: lattice.j_z.clone(),
-        rng_word_pos: rng.get_word_pos(),
+        rng_word_pos: rng.position(),
         thermalization_sweeps: task.thermalization,
         measurement_sweeps: task.sweeps,
         acceptance_sum,
