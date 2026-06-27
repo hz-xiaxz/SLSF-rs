@@ -96,7 +96,7 @@ pub(crate) fn run_theta_task_with_checkpoint(
 ) -> Result<ThetaTaskResult, String> {
     let params = task.params();
     let mut lattice = ThetaLattice::new(task.l_x, task.l_y, task.l_z)?;
-    let mut rng = ChaCha8Rng::seed_from_u64(task.seed);
+    let mut disorder_rng = FastRng::seed_from_u64(task.disorder_seed);
     match &task.j_xy_array {
         Some(j_xy_array) => {
             if j_xy_array.len() != task.l_z {
@@ -108,7 +108,7 @@ pub(crate) fn run_theta_task_with_checkpoint(
             &mut lattice.j_xy,
             task.j_xy,
             task.delta_j_xy,
-            &mut rng,
+            &mut disorder_rng,
             "J_xy",
         )?,
     }
@@ -123,13 +123,15 @@ pub(crate) fn run_theta_task_with_checkpoint(
             &mut lattice.j_z,
             task.j_z_mean,
             task.delta_j_z,
-            &mut rng,
+            &mut disorder_rng,
             "J_z",
         )?,
     }
     if lattice.j_xy.iter().any(|&j| j < 0.0) || lattice.j_z.iter().any(|&j| j < 0.0) {
         return Err("theta simulation requires nonnegative layer couplings".to_string());
     }
+
+    let mut rng = FastRng::seed_from_u64(task.seed);
     let mut thermalization_start = 0usize;
     let mut measurement_start = 0usize;
     let mut acceptance_sum = 0.0;
@@ -150,7 +152,7 @@ pub(crate) fn run_theta_task_with_checkpoint(
         }
         lattice.theta = state.theta;
         lattice.j_z = state.j_z;
-        rng.set_word_pos(state.rng_word_pos);
+        rng.set_position(state.rng_word_pos);
         thermalization_start = state.thermalization_sweeps.min(task.thermalization);
         measurement_start = state.measurement_sweeps.min(task.sweeps);
         acceptance_sum = state.acceptance_sum;
@@ -224,7 +226,7 @@ pub(crate) fn run_theta_task_with_checkpoint(
         let sweep_seconds = sweep_started.elapsed().as_secs_f64();
 
         let measure_started = Instant::now();
-        let obs = measure_theta_observables(&lattice, &params);
+        let obs = measure_theta_observables_with_scratch(&lattice, &params, &theta_scratch);
         let rho_x = obs.cos_x / volume - beta * obs.sin_x.powi(2) / volume;
         let rho_y = obs.cos_y / volume - beta * obs.sin_y.powi(2) / volume;
         let rho_z = obs.cos_z / volume - beta * obs.sin_z.powi(2) / volume;
@@ -272,7 +274,7 @@ pub(crate) fn run_theta_task_with_checkpoint(
             task_index,
             theta: lattice.theta.clone(),
             j_z: lattice.j_z.clone(),
-            rng_word_pos: rng.get_word_pos(),
+            rng_word_pos: rng.position(),
             thermalization_sweeps: task.thermalization,
             measurement_sweeps: task.sweeps,
             acceptance_sum,
@@ -293,7 +295,7 @@ pub(crate) fn run_theta_task_with_checkpoint(
         measurement_samples: BTreeMap::new(),
         final_theta: lattice.theta.clone(),
         final_j_z: lattice.j_z.clone(),
-        rng_word_pos: rng.get_word_pos(),
+        rng_word_pos: rng.position(),
         thermalization_sweeps: task.thermalization,
         measurement_sweeps: task.sweeps,
         acceptance_sum,

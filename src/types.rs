@@ -1,4 +1,85 @@
+use std::convert::Infallible;
+
+use rand::{SeedableRng, TryRng};
+
 pub const TWO_PI: f64 = std::f64::consts::PI * 2.0;
+const SPLITMIX64_GAMMA: u64 = 0x9E37_79B9_7F4A_7C15;
+
+#[derive(Debug, Clone)]
+pub struct FastRng {
+    seed: u64,
+    state: u64,
+    draws: u128,
+}
+
+impl FastRng {
+    #[inline]
+    fn splitmix64_next(state: &mut u64) -> u64 {
+        *state = state.wrapping_add(SPLITMIX64_GAMMA);
+        let mut z = *state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+
+    #[inline]
+    pub fn position(&self) -> u128 {
+        self.draws
+    }
+
+    pub fn set_position(&mut self, position: u128) {
+        self.state = self
+            .seed
+            .wrapping_add(SPLITMIX64_GAMMA.wrapping_mul(position as u64));
+        self.draws = position;
+    }
+}
+
+impl SeedableRng for FastRng {
+    type Seed = [u8; 8];
+
+    fn from_seed(seed: Self::Seed) -> Self {
+        let seed = u64::from_le_bytes(seed);
+        Self::seed_from_u64(seed)
+    }
+
+    fn seed_from_u64(seed: u64) -> Self {
+        Self {
+            seed,
+            state: seed,
+            draws: 0,
+        }
+    }
+}
+
+impl TryRng for FastRng {
+    type Error = Infallible;
+
+    #[inline]
+    fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+        Ok(self.try_next_u64()? as u32)
+    }
+
+    #[inline]
+    fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+        let word = Self::splitmix64_next(&mut self.state);
+        self.draws += 1;
+        Ok(word)
+    }
+
+    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Self::Error> {
+        let mut chunks = dest.chunks_exact_mut(8);
+        for chunk in &mut chunks {
+            chunk.copy_from_slice(&self.try_next_u64()?.to_le_bytes());
+        }
+        let remainder = chunks.into_remainder();
+        if !remainder.is_empty() {
+            let word = self.try_next_u64()?.to_le_bytes();
+            remainder.copy_from_slice(&word[..remainder.len()]);
+        }
+        Ok(())
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Parameters {
@@ -102,13 +183,14 @@ impl ThetaScratch {
     pub fn refresh(&mut self, lattice: &ThetaLattice) -> Result<(), String> {
         self.validate(lattice)?;
         for (i, &theta) in lattice.theta.iter().enumerate() {
-            self.sin_theta[i] = theta.sin();
-            self.cos_theta[i] = theta.cos();
+            let (sin_theta, cos_theta) = theta.sin_cos();
+            self.sin_theta[i] = sin_theta;
+            self.cos_theta[i] = cos_theta;
         }
         Ok(())
     }
 
-    pub(crate) fn validate(&self, lattice: &ThetaLattice) -> Result<(), String> {
+    pub fn validate(&self, lattice: &ThetaLattice) -> Result<(), String> {
         if self.dims != (lattice.l_x, lattice.l_y, lattice.l_z)
             || self.sin_theta.len() != lattice.volume()
             || self.cos_theta.len() != lattice.volume()
@@ -120,8 +202,14 @@ impl ThetaScratch {
 
     #[inline]
     pub(crate) fn update_site(&mut self, idx: usize, theta: f64) {
-        self.sin_theta[idx] = theta.sin();
-        self.cos_theta[idx] = theta.cos();
+        let (sin_theta, cos_theta) = theta.sin_cos();
+        self.set_site_trig(idx, sin_theta, cos_theta);
+    }
+
+    #[inline]
+    pub(crate) fn set_site_trig(&mut self, idx: usize, sin_theta: f64, cos_theta: f64) {
+        self.sin_theta[idx] = sin_theta;
+        self.cos_theta[idx] = cos_theta;
     }
 }
 
@@ -230,6 +318,17 @@ pub struct ThetaSimulationResult {
 
 #[inline]
 pub fn wrap_angle(theta: f64) -> f64 {
+    if theta >= TWO_PI {
+        theta - TWO_PI
+    } else if theta < 0.0 {
+        theta + TWO_PI
+    } else {
+        theta
+    }
+}
+
+#[inline]
+pub fn wrap_angle_full(theta: f64) -> f64 {
     theta.rem_euclid(TWO_PI)
 }
 

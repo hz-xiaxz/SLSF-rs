@@ -16,6 +16,7 @@ node_modules
 # Local run outputs and artifacts
 logs/
 results/
+runs/
 *.out
 *.log
 *.h5

@@ -174,7 +174,7 @@ impl ThetaJobConfig {
                                 + (100.0 * temperature).round() as u64
                                 + (1_000.0 * delta_j_xy).round() as u64 * 10_000
                                 + (1_000.0 * delta_j_z).round() as u64;
-                            let mut disorder_rng = ChaCha8Rng::seed_from_u64(disorder_seed);
+                            let mut disorder_rng = FastRng::seed_from_u64(disorder_seed);
                             let j_xy_array = generate_layer_disorder_values(
                                 l_z,
                                 self.j_xy,

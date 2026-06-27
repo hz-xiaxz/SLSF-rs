@@ -22,7 +22,11 @@ fn heartbeat_path_for_task(scheduler_dir: &Path, task_index: usize) -> PathBuf {
     task_marker_path(scheduler_dir, task_index, "heartbeat")
 }
 
-fn task_liveness_age(scheduler_dir: &Path, task_index: usize, claim_path: &Path) -> Option<Duration> {
+fn task_liveness_age(
+    scheduler_dir: &Path,
+    task_index: usize,
+    claim_path: &Path,
+) -> Option<Duration> {
     claim_age(&heartbeat_path_for_task(scheduler_dir, task_index)).or_else(|| claim_age(claim_path))
 }
 
@@ -118,7 +122,11 @@ fn mark_task_done(scheduler_dir: &Path, task_index: usize, claim_path: &Path) ->
     }
 }
 
-fn dynamic_task_order(task_count: usize, rank: usize, world_size: usize) -> impl Iterator<Item = usize> {
+fn dynamic_task_order(
+    task_count: usize,
+    rank: usize,
+    world_size: usize,
+) -> impl Iterator<Item = usize> {
     let offset = if task_count == 0 {
         0
     } else {
