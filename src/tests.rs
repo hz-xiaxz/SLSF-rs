@@ -885,6 +885,46 @@ fn theta_carlo_entrypoint_runs_task_and_roundtrips_result_json() {
             "version".to_string()
         ]
     );
+    let metadata_group = checkpoint.group("metadata").unwrap();
+    assert_eq!(
+        sorted_strings(metadata_group.datasets().unwrap()),
+        vec![
+            "checkpoint_version".to_string(),
+            "model".to_string(),
+            "task".to_string()
+        ]
+    );
+    assert_eq!(
+        metadata_group
+            .dataset("checkpoint_version")
+            .unwrap()
+            .read_string()
+            .unwrap(),
+        vec!["2".to_string()]
+    );
+    let checkpoint_measurements = checkpoint.group("measurements").unwrap();
+    for name in checkpoint_measurements.groups().unwrap() {
+        let observable_group = checkpoint_measurements.group(&name).unwrap();
+        assert_eq!(
+            sorted_strings(observable_group.datasets().unwrap()),
+            vec![
+                "bin_length".to_string(),
+                "internal_bins".to_string(),
+                "pending_count".to_string(),
+                "pending_sum".to_string(),
+                "total_count".to_string()
+            ]
+        );
+        assert_eq!(
+            observable_group
+                .dataset("internal_bins")
+                .unwrap()
+                .read_f64()
+                .unwrap()
+                .len(),
+            result.tasks[0].measurement_bins[&name].len()
+        );
+    }
     let simulation_group = checkpoint
         .group("contexts/rank0000/simulation")
         .expect("checkpoint simulation group");

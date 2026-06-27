@@ -463,6 +463,21 @@ pub fn merge_theta_job_from_env() -> Result<JobMergeSummary, String> {
     merge_theta_job_with_options(&cfg, options)
 }
 
+fn cleanup_theta_job_checkpoints(
+    cfg: &ThetaJobConfig,
+    options: &ThetaRunOptions,
+    task_count: usize,
+) -> Result<(), String> {
+    if !(options.checkpoint || checkpoint_enabled()) {
+        return Ok(());
+    }
+    let checkpoint_dir = checkpoint_dir_for_job(&cfg.job_name, options);
+    for task_index in 0..task_count {
+        remove_path_if_exists(&theta_task_checkpoint_path(&checkpoint_dir, task_index))?;
+    }
+    Ok(())
+}
+
 pub fn merge_theta_job_with_options(
     cfg: &ThetaJobConfig,
     options: ThetaRunOptions,
@@ -479,6 +494,7 @@ pub fn merge_theta_job_with_options(
     let merged = merge_theta_job_result_files(&input_paths)?;
     let task_count = merged.tasks.len();
     let output_path = write_theta_job_result_to_path(&merged, output_path)?;
+    cleanup_theta_job_checkpoints(cfg, &options, task_count)?;
     Ok(JobMergeSummary {
         output_path,
         input_paths,

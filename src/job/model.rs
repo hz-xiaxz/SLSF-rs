@@ -21,6 +21,19 @@ impl BinnedEstimate {
             .chunks_exact(internal_bin_length)
             .map(mean)
             .collect::<Vec<_>>();
+        Self::from_internal_bins(internal_bins, internal_bin_length)
+    }
+
+    pub fn from_internal_bins(
+        internal_bins: Vec<f64>,
+        internal_bin_length: usize,
+    ) -> Result<Self, String> {
+        if internal_bin_length == 0 {
+            return Err("binsize must be positive".to_string());
+        }
+        if internal_bins.is_empty() {
+            return Err("binsize is larger than the sample series".to_string());
+        }
         let rebin_length = carlo_rebin_length(internal_bins.len());
         let rebin_usable = internal_bins.len() - internal_bins.len() % rebin_length;
         if rebin_usable == 0 {
@@ -131,22 +144,96 @@ impl ObservableEstimate {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CompactObservableAccumulator {
+    pub internal_bins: Vec<f64>,
+    pub pending_sum: f64,
+    pub pending_count: usize,
+    pub total_count: usize,
+    pub internal_bin_length: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct ScalarAccumulator {
-    samples: Vec<f64>,
+    internal_bins: Vec<f64>,
+    pending_sum: f64,
+    pending_count: usize,
+    total_count: usize,
+    internal_bin_length: usize,
 }
 
 impl ScalarAccumulator {
-    pub fn push(&mut self, value: f64) {
-        self.samples.push(value);
+    pub fn new(internal_bin_length: usize) -> Self {
+        Self {
+            internal_bins: Vec::new(),
+            pending_sum: 0.0,
+            pending_count: 0,
+            total_count: 0,
+            internal_bin_length: internal_bin_length.max(1),
+        }
     }
 
-    pub fn samples(&self) -> &[f64] {
-        &self.samples
+    pub fn from_compact(mut compact: CompactObservableAccumulator, fallback_bin_length: usize) -> Self {
+        if compact.internal_bin_length == 0 {
+            compact.internal_bin_length = fallback_bin_length.max(1);
+        }
+        Self {
+            internal_bins: compact.internal_bins,
+            pending_sum: compact.pending_sum,
+            pending_count: compact.pending_count,
+            total_count: compact.total_count,
+            internal_bin_length: compact.internal_bin_length,
+        }
+    }
+
+    pub fn from_samples(samples: Vec<f64>, internal_bin_length: usize) -> Self {
+        let mut acc = Self::new(internal_bin_length);
+        for sample in samples {
+            acc.push(sample);
+        }
+        acc
+    }
+
+    pub fn from_internal_bins(internal_bins: Vec<f64>, internal_bin_length: usize) -> Self {
+        let internal_bin_length = internal_bin_length.max(1);
+        let total_count = internal_bins.len() * internal_bin_length;
+        Self {
+            internal_bins,
+            pending_sum: 0.0,
+            pending_count: 0,
+            total_count,
+            internal_bin_length,
+        }
+    }
+
+    pub fn push(&mut self, value: f64) {
+        self.pending_sum += value;
+        self.pending_count += 1;
+        self.total_count += 1;
+        if self.pending_count == self.internal_bin_length {
+            self.internal_bins
+                .push(self.pending_sum / self.internal_bin_length as f64);
+            self.pending_sum = 0.0;
+            self.pending_count = 0;
+        }
+    }
+
+    pub fn internal_bins(&self) -> &[f64] {
+        &self.internal_bins
+    }
+
+    pub fn compact(&self) -> CompactObservableAccumulator {
+        CompactObservableAccumulator {
+            internal_bins: self.internal_bins.clone(),
+            pending_sum: self.pending_sum,
+            pending_count: self.pending_count,
+            total_count: self.total_count,
+            internal_bin_length: self.internal_bin_length,
+        }
     }
 
     pub fn estimate(&self, binsize: usize) -> Result<BinnedEstimate, String> {
-        BinnedEstimate::from_samples(&self.samples, binsize)
+        BinnedEstimate::from_internal_bins(self.internal_bins.clone(), binsize)
     }
 }
 
@@ -405,5 +492,5 @@ struct ThetaCheckpointState {
     measurement_sweeps: usize,
     acceptance_sum: f64,
     acceptance_count: usize,
-    measurement_samples: BTreeMap<String, Vec<f64>>,
+    measurement_accumulators: BTreeMap<String, CompactObservableAccumulator>,
 }

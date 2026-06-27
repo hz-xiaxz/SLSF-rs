@@ -1,24 +1,41 @@
-#[derive(Debug, Default)]
-struct ObservableSeries(BTreeMap<String, ScalarAccumulator>);
+#[derive(Debug)]
+struct ObservableSeries {
+    accumulators: BTreeMap<String, ScalarAccumulator>,
+    binsize: usize,
+}
 
 impl ObservableSeries {
+    fn new(binsize: usize) -> Self {
+        Self {
+            accumulators: BTreeMap::new(),
+            binsize: binsize.max(1),
+        }
+    }
+
     fn push(&mut self, name: impl Into<String>, value: f64) {
-        self.0.entry(name.into()).or_default().push(value);
+        self.accumulators
+            .entry(name.into())
+            .or_insert_with(|| ScalarAccumulator::new(self.binsize))
+            .push(value);
     }
 
-    fn from_samples(samples: BTreeMap<String, Vec<f64>>) -> Self {
-        Self(
-            samples
+    fn from_compact(
+        accumulators: BTreeMap<String, CompactObservableAccumulator>,
+        binsize: usize,
+    ) -> Self {
+        Self {
+            accumulators: accumulators
                 .into_iter()
-                .map(|(name, samples)| (name, ScalarAccumulator { samples }))
+                .map(|(name, acc)| (name, ScalarAccumulator::from_compact(acc, binsize)))
                 .collect(),
-        )
+            binsize: binsize.max(1),
+        }
     }
 
-    fn samples(&self) -> BTreeMap<String, Vec<f64>> {
-        self.0
+    fn compact(&self) -> BTreeMap<String, CompactObservableAccumulator> {
+        self.accumulators
             .iter()
-            .map(|(name, acc)| (name.clone(), acc.samples().to_vec()))
+            .map(|(name, acc)| (name.clone(), acc.compact()))
             .collect()
     }
 
@@ -33,7 +50,7 @@ impl ObservableSeries {
         String,
     > {
         let binned = self
-            .0
+            .accumulators
             .iter()
             .map(|(name, acc)| Ok((name.clone(), acc.estimate(binsize)?)))
             .collect::<Result<BTreeMap<_, _>, String>>()?;
@@ -117,7 +134,7 @@ pub(crate) fn run_theta_task_with_checkpoint(
     let mut measurement_start = 0usize;
     let mut acceptance_sum = 0.0;
     let mut acceptance_count = 0usize;
-    let mut series = ObservableSeries::default();
+    let mut series = ObservableSeries::new(task.binsize);
 
     if let Some(runtime) = checkpoint.filter(|runtime| runtime.resume && runtime.path.exists()) {
         let state = read_theta_task_checkpoint(&runtime.path)?;
@@ -138,7 +155,7 @@ pub(crate) fn run_theta_task_with_checkpoint(
         measurement_start = state.measurement_sweeps.min(task.sweeps);
         acceptance_sum = state.acceptance_sum;
         acceptance_count = state.acceptance_count;
-        series = ObservableSeries::from_samples(state.measurement_samples);
+        series = ObservableSeries::from_compact(state.measurement_accumulators, task.binsize);
     } else {
         initialize_angles(&mut lattice, InitMode::Random, &mut rng)?;
     }
@@ -260,12 +277,11 @@ pub(crate) fn run_theta_task_with_checkpoint(
             measurement_sweeps: task.sweeps,
             acceptance_sum,
             acceptance_count,
-            measurement_samples: series.samples(),
+            measurement_accumulators: series.compact(),
         };
         write_theta_checkpoint_state_to_path(&state, &checkpoint.path)?;
     }
 
-    let measurement_samples = series.samples();
     let (observables, measurement_bins) = series.estimates_and_measurement_bins(task.binsize)?;
     Ok(ThetaTaskResult {
         task: task.clone(),
@@ -274,7 +290,7 @@ pub(crate) fn run_theta_task_with_checkpoint(
         acceptance: acceptance_sum / acceptance_count.max(1) as f64,
         measurements: task.sweeps,
         measurement_bins,
-        measurement_samples,
+        measurement_samples: BTreeMap::new(),
         final_theta: lattice.theta.clone(),
         final_j_z: lattice.j_z.clone(),
         rng_word_pos: rng.get_word_pos(),

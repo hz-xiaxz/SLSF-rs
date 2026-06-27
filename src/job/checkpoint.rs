@@ -87,8 +87,6 @@ fn write_theta_checkpoint_state_to_path(
     }
 
     let task_json = serde_json::to_string(&state.task).map_err(|err| err.to_string())?;
-    let samples_json =
-        serde_json::to_string(&state.measurement_samples).map_err(|err| err.to_string())?;
 
     let mut builder = FileBuilder::new();
 
@@ -158,23 +156,38 @@ fn write_theta_checkpoint_state_to_path(
     builder.add_group(progress_group.finish());
 
     let mut measurements_group = builder.create_group("measurements");
-    for (name, samples) in &state.measurement_samples {
+    for (name, accumulator) in &state.measurement_accumulators {
         let mut observable_group = measurements_group.create_group(name);
         observable_group
-            .create_dataset("samples")
-            .with_f64_data(samples)
-            .with_shape(&[samples.len() as u64])
+            .create_dataset("internal_bins")
+            .with_f64_data(&accumulator.internal_bins)
+            .with_shape(&[accumulator.internal_bins.len() as u64])
             .with_maxshape(&[u64::MAX])
             .with_chunks(&[1000]);
+        observable_group
+            .create_dataset("pending_sum")
+            .with_f64_data(&[accumulator.pending_sum])
+            .with_shape(&[]);
+        observable_group
+            .create_dataset("pending_count")
+            .with_i64_data(&[accumulator.pending_count as i64])
+            .with_shape(&[]);
+        observable_group
+            .create_dataset("total_count")
+            .with_i64_data(&[accumulator.total_count as i64])
+            .with_shape(&[]);
+        observable_group
+            .create_dataset("bin_length")
+            .with_i64_data(&[accumulator.internal_bin_length as i64])
+            .with_shape(&[]);
         measurements_group.add_group(observable_group.finish());
     }
     builder.add_group(measurements_group.finish());
 
     let mut metadata_group = builder.create_group("metadata");
-    add_fixed_string_dataset(&mut metadata_group, "checkpoint_version", "1");
+    add_fixed_string_dataset(&mut metadata_group, "checkpoint_version", "2");
     add_fixed_string_dataset(&mut metadata_group, "model", "theta");
     add_fixed_string_dataset(&mut metadata_group, "task", &task_json);
-    add_fixed_string_dataset(&mut metadata_group, "measurement_samples", &samples_json);
     builder.add_group(metadata_group.finish());
 
     let mut contexts_group = builder.create_group("contexts");
@@ -215,7 +228,20 @@ fn theta_checkpoint_state_from_result(task_result: &ThetaTaskResult) -> ThetaChe
         measurement_sweeps: task_result.measurement_sweeps,
         acceptance_sum: task_result.acceptance_sum,
         acceptance_count: task_result.acceptance_count,
-        measurement_samples: task_result.measurement_samples.clone(),
+        measurement_accumulators: task_result
+            .measurement_bins
+            .iter()
+            .map(|(name, bins)| {
+                (
+                    name.clone(),
+                    ScalarAccumulator::from_internal_bins(
+                        bins.clone(),
+                        task_result.observables[name].internal_bin_len,
+                    )
+                    .compact(),
+                )
+            })
+            .collect(),
     }
 }
 
@@ -275,7 +301,7 @@ fn maybe_write_theta_checkpoint(
         measurement_sweeps,
         acceptance_sum,
         acceptance_count,
-        measurement_samples: series.samples(),
+        measurement_accumulators: series.compact(),
     };
     write_theta_checkpoint_state_to_path(&state, &checkpoint.path)?;
     if let Some(heartbeat_path) = &checkpoint.heartbeat_path {
@@ -339,6 +365,80 @@ fn read_scalar_string(group: &Group<'_>, name: &str) -> Result<String, String> {
         .ok_or_else(|| format!("{name} dataset is empty"))
 }
 
+fn read_optional_scalar_i64(group: &Group<'_>, name: &str) -> Result<Option<i64>, String> {
+    match group.dataset(name) {
+        Ok(dataset) => dataset
+            .read_i64()
+            .map_err(|err| err.to_string())?
+            .into_iter()
+            .next()
+            .map(Some)
+            .ok_or_else(|| format!("{name} dataset is empty")),
+        Err(_) => Ok(None),
+    }
+}
+
+fn read_optional_scalar_f64(group: &Group<'_>, name: &str) -> Result<Option<f64>, String> {
+    match group.dataset(name) {
+        Ok(dataset) => dataset
+            .read_f64()
+            .map_err(|err| err.to_string())?
+            .into_iter()
+            .next()
+            .map(Some)
+            .ok_or_else(|| format!("{name} dataset is empty")),
+        Err(_) => Ok(None),
+    }
+}
+
+fn read_measurement_accumulators(
+    file: &Hdf5File,
+    fallback_bin_length: usize,
+) -> Result<BTreeMap<String, CompactObservableAccumulator>, String> {
+    let Ok(measurements_group) = file.group("measurements") else {
+        return Ok(BTreeMap::new());
+    };
+    let mut accumulators = BTreeMap::new();
+    for name in measurements_group.groups().map_err(|err| err.to_string())? {
+        let observable_group = measurements_group
+            .group(&name)
+            .map_err(|err| err.to_string())?;
+        let internal_bin_length = read_optional_scalar_i64(&observable_group, "bin_length")?
+            .map(|value| value as usize)
+            .unwrap_or(fallback_bin_length.max(1));
+        let internal_bins = match observable_group.dataset("internal_bins") {
+            Ok(dataset) => dataset.read_f64().map_err(|err| err.to_string())?,
+            Err(_) => match observable_group.dataset("samples") {
+                Ok(dataset) => ScalarAccumulator::from_samples(
+                    dataset.read_f64().map_err(|err| err.to_string())?,
+                    internal_bin_length,
+                )
+                .compact()
+                .internal_bins,
+                Err(_) => Vec::new(),
+            },
+        };
+        let pending_sum = read_optional_scalar_f64(&observable_group, "pending_sum")?.unwrap_or(0.0);
+        let pending_count = read_optional_scalar_i64(&observable_group, "pending_count")?
+            .map(|value| value as usize)
+            .unwrap_or(0);
+        let total_count = read_optional_scalar_i64(&observable_group, "total_count")?
+            .map(|value| value as usize)
+            .unwrap_or(internal_bins.len() * internal_bin_length + pending_count);
+        accumulators.insert(
+            name,
+            CompactObservableAccumulator {
+                internal_bins,
+                pending_sum,
+                pending_count,
+                total_count,
+                internal_bin_length,
+            },
+        );
+    }
+    Ok(accumulators)
+}
+
 fn read_theta_task_checkpoint(path: impl AsRef<Path>) -> Result<ThetaCheckpointState, String> {
     let path = path.as_ref();
     let file = hdf5_file(path)?;
@@ -383,9 +483,7 @@ fn read_theta_task_checkpoint(path: impl AsRef<Path>) -> Result<ThetaCheckpointS
             .read_u64()
             .map_err(|err| err.to_string())?,
     )?;
-    let measurement_samples = read_scalar_string(&metadata_group, "measurement_samples")
-        .and_then(|json| serde_json::from_str(&json).map_err(|err| err.to_string()))
-        .unwrap_or_default();
+    let measurement_accumulators = read_measurement_accumulators(&file, task.binsize)?;
 
     Ok(ThetaCheckpointState {
         task,
@@ -397,7 +495,7 @@ fn read_theta_task_checkpoint(path: impl AsRef<Path>) -> Result<ThetaCheckpointS
         measurement_sweeps: read_scalar_i64(&progress_group, "measurement_sweeps")? as usize,
         acceptance_sum: read_scalar_f64(&progress_group, "acceptance_sum")?,
         acceptance_count: read_scalar_i64(&progress_group, "acceptance_count")? as usize,
-        measurement_samples,
+        measurement_accumulators,
     })
 }
 
