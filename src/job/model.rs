@@ -70,6 +70,10 @@ impl BinnedEstimate {
     }
 }
 
+fn mean(values: &[f64]) -> f64 {
+    values.iter().sum::<f64>() / values.len() as f64
+}
+
 fn carlo_rebin_count(sample_count: usize) -> usize {
     if sample_count <= 10 {
         sample_count

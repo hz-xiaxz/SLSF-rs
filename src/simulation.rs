@@ -1,6 +1,5 @@
 use rand::Rng;
 
-use crate::autocorrelation::{blocking_stderr, mean};
 use crate::initialization::{initialize_angles, initialize_disorder};
 use crate::observables::{measure_theta_correlations, measure_theta_observables};
 use crate::types::{
@@ -181,6 +180,37 @@ pub fn run_theta_simulation<R: Rng + ?Sized>(
         num_measurements,
         num_correlation_measurements: corr_measurements,
     })
+}
+
+fn mean(x: &[f64]) -> f64 {
+    x.iter().sum::<f64>() / x.len() as f64
+}
+
+fn sample_std(x: &[f64]) -> f64 {
+    if x.len() <= 1 {
+        return 0.0;
+    }
+    let avg = mean(x);
+    let variance = x.iter().map(|v| (v - avg).powi(2)).sum::<f64>() / (x.len() - 1) as f64;
+    variance.sqrt()
+}
+
+fn blocking_stderr(x: &[f64]) -> f64 {
+    if x.len() <= 1 {
+        return 0.0;
+    }
+    let mut data = x.to_vec();
+    let mut stderr = sample_std(&data) / (data.len() as f64).sqrt();
+    while data.len() >= 16 {
+        let even_length = data.len() - (data.len() % 2);
+        data = (0..even_length)
+            .step_by(2)
+            .map(|i| (data[i] + data[i + 1]) / 2.0)
+            .collect();
+        let candidate = sample_std(&data) / (data.len() as f64).sqrt();
+        stderr = stderr.max(candidate);
+    }
+    stderr
 }
 
 fn mean_square(x: &[f64]) -> f64 {

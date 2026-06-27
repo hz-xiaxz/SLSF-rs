@@ -13,7 +13,6 @@ use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use serde::{Deserialize, Serialize};
 
-use crate::autocorrelation::mean;
 use crate::initialization::{initialize_angles, initialize_disorder};
 use crate::observables::{measure_theta_correlations, measure_theta_observables};
 use crate::types::{InitMode, Parameters, ThetaLattice, ThetaScratch, WolffScratch};

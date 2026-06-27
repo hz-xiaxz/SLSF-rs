@@ -1,4 +1,3 @@
-pub mod autocorrelation;
 pub mod initialization;
 pub mod job;
 pub mod observables;
@@ -8,7 +7,6 @@ mod tests;
 pub mod types;
 pub mod updates;
 
-pub use autocorrelation::*;
 pub use initialization::*;
 pub use job::*;
 pub use observables::*;

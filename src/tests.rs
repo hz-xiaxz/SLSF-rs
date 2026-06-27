@@ -15,20 +15,6 @@ fn sorted_strings(mut values: Vec<String>) -> Vec<String> {
 }
 
 #[test]
-fn autocorrelation_utilities_match_julia_behavior() {
-    let x = (1..=32)
-        .map(|i| if i % 2 == 1 { 1.0 } else { -1.0 })
-        .collect::<Vec<_>>();
-    assert_abs_diff_eq!(
-        integrated_autocorrelation_time(&x, None),
-        0.5,
-        epsilon = 1e-12
-    );
-    let y = (1..=32).map(|i| i as f64).collect::<Vec<_>>();
-    assert!(blocking_stderr(&y) >= sample_std(&y) / (y.len() as f64).sqrt());
-}
-
-#[test]
 fn theta_lattice_initialization_and_disorder() {
     assert!(ThetaLattice::new(0, 2, 2).is_err());
     assert!(ThetaLattice::new(2, 0, 2).is_err());
@@ -49,12 +35,15 @@ fn theta_lattice_initialization_and_disorder() {
     let uniform_params = Parameters::new(1.0, 1.0, 0.5, 2.0);
     initialize_disorder(&mut uniform_lat, &uniform_params, &mut rng).unwrap();
     assert!(uniform_lat.j_z.iter().all(|&v| (0.5..=1.5).contains(&v)));
-    assert_abs_diff_eq!(mean(&uniform_lat.j_z), 1.0, epsilon = 5e-3);
-    assert_abs_diff_eq!(
-        sample_std(&uniform_lat.j_z),
-        0.5 / 3.0_f64.sqrt(),
-        epsilon = 5e-3
-    );
+    let disorder_mean = uniform_lat.j_z.iter().sum::<f64>() / uniform_lat.j_z.len() as f64;
+    assert_abs_diff_eq!(disorder_mean, 1.0, epsilon = 5e-3);
+    let variance = uniform_lat
+        .j_z
+        .iter()
+        .map(|value| (value - disorder_mean).powi(2))
+        .sum::<f64>()
+        / (uniform_lat.j_z.len() - 1) as f64;
+    assert_abs_diff_eq!(variance.sqrt(), 0.5 / 3.0_f64.sqrt(), epsilon = 5e-3);
 
     assert_err_eq(
         initialize_disorder(&mut lat, &Parameters::new(1.0, 1.0, -0.1, 2.0), &mut rng),
