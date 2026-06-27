@@ -1,0 +1,374 @@
+fn theta_task_checkpoint_path(output_dir: impl AsRef<Path>, task_index: usize) -> PathBuf {
+    output_dir
+        .as_ref()
+        .join(format!("task{:04}", task_index + 1))
+        .join("run0001.dump.h5")
+}
+
+fn checkpoint_dir_for_job(job_name: &str, options: &ThetaRunOptions) -> PathBuf {
+    options
+        .checkpoint_dir
+        .clone()
+        .unwrap_or_else(|| default_measurement_dir_with_options(job_name, options))
+}
+
+fn checkpoint_runtime_for_task(
+    job_name: &str,
+    options: &ThetaRunOptions,
+    checkpoint_time: Duration,
+    task_index: usize,
+) -> Option<ThetaCheckpointRuntime> {
+    if !(options.checkpoint || options.restart || checkpoint_enabled()) {
+        return None;
+    }
+    let checkpoint_dir = checkpoint_dir_for_job(job_name, options);
+    Some(ThetaCheckpointRuntime {
+        path: theta_task_checkpoint_path(checkpoint_dir, task_index),
+        interval: checkpoint_time,
+        resume: options.restart,
+    })
+}
+
+fn finish_theta_job_run(
+    result: &ThetaJobResult,
+    output_path: PathBuf,
+    started: Instant,
+    options: &ThetaRunOptions,
+) -> Result<JobRunSummary, String> {
+    let task_count = result.tasks.len();
+    let measurement_dir = options
+        .measurement_dir
+        .clone()
+        .unwrap_or_else(|| default_measurement_dir_with_options(&result.job_name, options));
+    write_theta_job_measurements(result, measurement_dir)?;
+    let checkpoint_paths = if options.checkpoint || checkpoint_enabled() {
+        let checkpoint_dir = checkpoint_dir_for_job(&result.job_name, options);
+        write_theta_job_checkpoints(result, checkpoint_dir)?
+    } else {
+        Vec::new()
+    };
+    let output_path = write_theta_job_result_to_path(result, output_path)?;
+    Ok(JobRunSummary {
+        output_path,
+        task_count,
+        elapsed_seconds: started.elapsed().as_secs_f64(),
+        checkpoint_paths,
+    })
+}
+
+fn checkpoint_enabled() -> bool {
+    std::env::var("XY_CHECKPOINT")
+        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+        .unwrap_or(false)
+}
+
+pub fn write_theta_job_checkpoints(
+    result: &ThetaJobResult,
+    output_dir: impl AsRef<Path>,
+) -> Result<Vec<PathBuf>, String> {
+    let mut paths = Vec::with_capacity(result.tasks.len());
+    for task_result in &result.tasks {
+        let path = theta_task_checkpoint_path(output_dir.as_ref(), task_result.task_index);
+        write_theta_task_checkpoint_to_path(task_result, &path)?;
+        paths.push(path);
+    }
+    Ok(paths)
+}
+
+fn write_theta_checkpoint_state_to_path(
+    state: &ThetaCheckpointState,
+    path: impl AsRef<Path>,
+) -> Result<PathBuf, String> {
+    let path = path.as_ref();
+    let tmp_path = path.with_extension("h5.tmp");
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+    }
+
+    let task_json = serde_json::to_string(&state.task).map_err(|err| err.to_string())?;
+    let samples_json =
+        serde_json::to_string(&state.measurement_samples).map_err(|err| err.to_string())?;
+
+    let mut builder = FileBuilder::new();
+
+    let mut parameters_group = builder.create_group("parameters");
+    parameters_group
+        .create_dataset("T")
+        .with_f64_data(&[state.task.temperature])
+        .with_shape(&[]);
+    parameters_group
+        .create_dataset("J_z")
+        .with_f64_data(&state.j_z)
+        .with_shape(&[state.j_z.len() as u64]);
+    parameters_group
+        .create_dataset("j_xy")
+        .with_f64_data(&[state.task.j_xy])
+        .with_shape(&[]);
+    parameters_group
+        .create_dataset("delta_j_z")
+        .with_f64_data(&[state.task.delta_j_z])
+        .with_shape(&[]);
+    builder.add_group(parameters_group.finish());
+
+    let mut state_group = builder.create_group("state");
+    state_group
+        .create_dataset("theta")
+        .with_f64_data(&state.theta)
+        .with_shape(&[
+            state.task.l_x as u64,
+            state.task.l_y as u64,
+            state.task.l_z as u64,
+        ]);
+    state_group
+        .create_dataset("rng_word_pos")
+        .with_u64_data(&u128_to_u64_pair(state.rng_word_pos))
+        .with_shape(&[2]);
+    builder.add_group(state_group.finish());
+
+    let mut progress_group = builder.create_group("progress");
+    progress_group
+        .create_dataset("task_index")
+        .with_i64_data(&[state.task_index as i64])
+        .with_shape(&[]);
+    progress_group
+        .create_dataset("thermalization_sweeps")
+        .with_i64_data(&[state.thermalization_sweeps as i64])
+        .with_shape(&[]);
+    progress_group
+        .create_dataset("measurement_sweeps")
+        .with_i64_data(&[state.measurement_sweeps as i64])
+        .with_shape(&[]);
+    progress_group
+        .create_dataset("target_thermalization")
+        .with_i64_data(&[state.task.thermalization as i64])
+        .with_shape(&[]);
+    progress_group
+        .create_dataset("target_sweeps")
+        .with_i64_data(&[state.task.sweeps as i64])
+        .with_shape(&[]);
+    progress_group
+        .create_dataset("acceptance_sum")
+        .with_f64_data(&[state.acceptance_sum])
+        .with_shape(&[]);
+    progress_group
+        .create_dataset("acceptance_count")
+        .with_i64_data(&[state.acceptance_count as i64])
+        .with_shape(&[]);
+    builder.add_group(progress_group.finish());
+
+    let mut measurements_group = builder.create_group("measurements");
+    for (name, samples) in &state.measurement_samples {
+        let mut observable_group = measurements_group.create_group(name);
+        observable_group
+            .create_dataset("samples")
+            .with_f64_data(samples)
+            .with_shape(&[samples.len() as u64])
+            .with_maxshape(&[u64::MAX])
+            .with_chunks(&[1000]);
+        measurements_group.add_group(observable_group.finish());
+    }
+    builder.add_group(measurements_group.finish());
+
+    let mut metadata_group = builder.create_group("metadata");
+    add_fixed_string_dataset(&mut metadata_group, "checkpoint_version", "1");
+    add_fixed_string_dataset(&mut metadata_group, "model", "theta");
+    add_fixed_string_dataset(&mut metadata_group, "task", &task_json);
+    add_fixed_string_dataset(&mut metadata_group, "measurement_samples", &samples_json);
+    builder.add_group(metadata_group.finish());
+
+    let mut contexts_group = builder.create_group("contexts");
+    let mut rank_group = contexts_group.create_group("rank0000");
+    let mut simulation_group = rank_group.create_group("simulation");
+    add_fixed_string_dataset(&mut simulation_group, "task", &task_json);
+    simulation_group
+        .create_dataset("task_index")
+        .with_i64_data(&[state.task_index as i64])
+        .with_shape(&[]);
+    simulation_group
+        .create_dataset("measurements")
+        .with_i64_data(&[state.measurement_sweeps as i64])
+        .with_shape(&[]);
+    rank_group.add_group(simulation_group.finish());
+    contexts_group.add_group(rank_group.finish());
+    builder.add_group(contexts_group.finish());
+
+    let mut version_group = builder.create_group("version");
+    add_fixed_string_dataset(&mut version_group, "carlo_version", &carlo_version());
+    add_fixed_string_dataset(&mut version_group, "mc_package", "SLSF.XYCarlo");
+    add_fixed_string_dataset(&mut version_group, "mc_version", &mc_version());
+    builder.add_group(version_group.finish());
+
+    builder.write(&tmp_path).map_err(|err| err.to_string())?;
+    fs::rename(&tmp_path, path).map_err(|err| err.to_string())?;
+    Ok(path.to_path_buf())
+}
+
+fn theta_checkpoint_state_from_result(task_result: &ThetaTaskResult) -> ThetaCheckpointState {
+    ThetaCheckpointState {
+        task: task_result.task.clone(),
+        task_index: task_result.task_index,
+        theta: task_result.final_theta.clone(),
+        j_z: task_result.final_j_z.clone(),
+        rng_word_pos: task_result.rng_word_pos,
+        thermalization_sweeps: task_result.thermalization_sweeps,
+        measurement_sweeps: task_result.measurement_sweeps,
+        acceptance_sum: task_result.acceptance_sum,
+        acceptance_count: task_result.acceptance_count,
+        measurement_samples: task_result.measurement_samples.clone(),
+    }
+}
+
+fn maybe_write_theta_checkpoint(
+    checkpoint: Option<&ThetaCheckpointRuntime>,
+    last_checkpoint: &mut Instant,
+    task: &ThetaTask,
+    task_index: usize,
+    lattice: &ThetaLattice,
+    rng: &ChaCha8Rng,
+    thermalization_sweeps: usize,
+    measurement_sweeps: usize,
+    acceptance_sum: f64,
+    acceptance_count: usize,
+    series: &ObservableSeries,
+) -> Result<(), String> {
+    let Some(checkpoint) = checkpoint else {
+        return Ok(());
+    };
+    if checkpoint.interval > Duration::ZERO && last_checkpoint.elapsed() < checkpoint.interval {
+        return Ok(());
+    }
+    let state = ThetaCheckpointState {
+        task: task.clone(),
+        task_index,
+        theta: lattice.theta.clone(),
+        j_z: lattice.j_z.clone(),
+        rng_word_pos: rng.get_word_pos(),
+        thermalization_sweeps,
+        measurement_sweeps,
+        acceptance_sum,
+        acceptance_count,
+        measurement_samples: series.samples(),
+    };
+    write_theta_checkpoint_state_to_path(&state, &checkpoint.path)?;
+    *last_checkpoint = Instant::now();
+    Ok(())
+}
+
+fn u128_to_u64_pair(value: u128) -> [u64; 2] {
+    [(value >> 64) as u64, value as u64]
+}
+
+fn u64_pair_to_u128(values: &[u64]) -> Result<u128, String> {
+    if values.len() != 2 {
+        return Err("rng_word_pos dataset must contain two u64 values".to_string());
+    }
+    Ok(((values[0] as u128) << 64) | values[1] as u128)
+}
+
+fn hdf5_file(path: &Path) -> Result<Hdf5File, String> {
+    Hdf5File::from_bytes(fs::read(path).map_err(|err| err.to_string())?)
+        .map_err(|err| err.to_string())
+}
+
+fn read_scalar_i64(group: &Group<'_>, name: &str) -> Result<i64, String> {
+    group
+        .dataset(name)
+        .map_err(|err| err.to_string())?
+        .read_i64()
+        .map_err(|err| err.to_string())?
+        .into_iter()
+        .next()
+        .ok_or_else(|| format!("{name} dataset is empty"))
+}
+
+fn read_scalar_f64(group: &Group<'_>, name: &str) -> Result<f64, String> {
+    group
+        .dataset(name)
+        .map_err(|err| err.to_string())?
+        .read_f64()
+        .map_err(|err| err.to_string())?
+        .into_iter()
+        .next()
+        .ok_or_else(|| format!("{name} dataset is empty"))
+}
+
+fn read_scalar_string(group: &Group<'_>, name: &str) -> Result<String, String> {
+    group
+        .dataset(name)
+        .map_err(|err| err.to_string())?
+        .read_string()
+        .map_err(|err| err.to_string())?
+        .into_iter()
+        .next()
+        .ok_or_else(|| format!("{name} dataset is empty"))
+}
+
+fn read_theta_task_checkpoint(path: impl AsRef<Path>) -> Result<ThetaCheckpointState, String> {
+    let path = path.as_ref();
+    let file = hdf5_file(path)?;
+    let parameters_group = file.group("parameters").map_err(|err| err.to_string())?;
+    let state_group = file.group("state").map_err(|err| err.to_string())?;
+    let progress_group = file.group("progress").map_err(|err| err.to_string())?;
+    let metadata_group = file.group("metadata").map_err(|err| err.to_string())?;
+
+    let task_json = read_scalar_string(&metadata_group, "task")?;
+    let mut task: ThetaTask = serde_json::from_str(&task_json).map_err(|err| err.to_string())?;
+    task.temperature = read_scalar_f64(&parameters_group, "T")?;
+    let j_z = parameters_group
+        .dataset("J_z")
+        .map_err(|err| err.to_string())?
+        .read_f64()
+        .map_err(|err| err.to_string())?;
+    let theta = state_group
+        .dataset("theta")
+        .map_err(|err| err.to_string())?
+        .read_f64()
+        .map_err(|err| err.to_string())?;
+    if j_z.len() != task.l_z {
+        return Err(format!(
+            "checkpoint {} has J_z length {}, expected {}",
+            path.display(),
+            j_z.len(),
+            task.l_z
+        ));
+    }
+    if theta.len() != task.l_x * task.l_y * task.l_z {
+        return Err(format!(
+            "checkpoint {} has theta length {}, expected {}",
+            path.display(),
+            theta.len(),
+            task.l_x * task.l_y * task.l_z
+        ));
+    }
+    let rng_word_pos = u64_pair_to_u128(
+        &state_group
+            .dataset("rng_word_pos")
+            .map_err(|err| err.to_string())?
+            .read_u64()
+            .map_err(|err| err.to_string())?,
+    )?;
+    let measurement_samples = read_scalar_string(&metadata_group, "measurement_samples")
+        .and_then(|json| serde_json::from_str(&json).map_err(|err| err.to_string()))
+        .unwrap_or_default();
+
+    Ok(ThetaCheckpointState {
+        task,
+        task_index: read_scalar_i64(&progress_group, "task_index")? as usize,
+        theta,
+        j_z,
+        rng_word_pos,
+        thermalization_sweeps: read_scalar_i64(&progress_group, "thermalization_sweeps")? as usize,
+        measurement_sweeps: read_scalar_i64(&progress_group, "measurement_sweeps")? as usize,
+        acceptance_sum: read_scalar_f64(&progress_group, "acceptance_sum")?,
+        acceptance_count: read_scalar_i64(&progress_group, "acceptance_count")? as usize,
+        measurement_samples,
+    })
+}
+
+pub fn write_theta_task_checkpoint_to_path(
+    task_result: &ThetaTaskResult,
+    path: impl AsRef<Path>,
+) -> Result<PathBuf, String> {
+    let state = theta_checkpoint_state_from_result(task_result);
+    write_theta_checkpoint_state_to_path(&state, path)
+}
