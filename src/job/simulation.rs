@@ -76,7 +76,7 @@ pub fn run_theta_task(task: &ThetaTask) -> Result<ThetaTaskResult, String> {
     run_theta_task_with_checkpoint(task, 0, None)
 }
 
-fn run_theta_task_with_checkpoint(
+pub(crate) fn run_theta_task_with_checkpoint(
     task: &ThetaTask,
     task_index: usize,
     checkpoint: Option<&ThetaCheckpointRuntime>,

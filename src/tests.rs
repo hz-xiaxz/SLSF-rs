@@ -2,6 +2,7 @@ use approx::assert_abs_diff_eq;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use std::fs;
+use std::time::Duration;
 
 use crate::*;
 
@@ -490,6 +491,80 @@ fn theta_dynamic_scheduler_skips_completed_claims() {
     fs::remove_file(scheduler_dir.join("task0001.done")).unwrap();
     fs::remove_dir(scheduler_dir).unwrap();
     fs::remove_dir(dir).unwrap();
+}
+
+#[test]
+fn theta_dynamic_scheduler_heartbeat_prevents_stale_reclaim() {
+    let dir =
+        std::env::temp_dir().join(format!("slsf_theta_heartbeat_test_{}", std::process::id()));
+    let scheduler_dir = dir.join("scheduler");
+    fs::create_dir_all(&scheduler_dir).unwrap();
+    let claim_path = scheduler_dir.join("task0000.claim");
+    let heartbeat_path = scheduler_dir.join("task0000.heartbeat");
+    fs::write(&claim_path, "rank=999\n").unwrap();
+    write_scheduler_heartbeat(&heartbeat_path, 0, 10, 20).unwrap();
+
+    remove_stale_claim_if_needed(&scheduler_dir, 0, &claim_path, Duration::from_secs(60)).unwrap();
+
+    assert!(claim_path.exists());
+    assert!(heartbeat_path.exists());
+    assert!(!fs::read_dir(&scheduler_dir).unwrap().any(|entry| entry
+        .unwrap()
+        .file_name()
+        .to_string_lossy()
+        .contains("claim.stale")));
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn theta_checkpoint_writes_scheduler_heartbeat() {
+    let dir = std::env::temp_dir().join(format!(
+        "slsf_theta_checkpoint_heartbeat_test_{}",
+        std::process::id()
+    ));
+    let checkpoint_path = dir.join("task0001/run0001.dump.h5");
+    let heartbeat_path = dir.join("scheduler/task0000.heartbeat");
+    let task = ThetaTask {
+        name: "checkpoint_heartbeat".to_string(),
+        l: 2,
+        l_x: 2,
+        l_y: 2,
+        l_z: 2,
+        temperature: 1.0,
+        j_xy: 1.0,
+        j_z_mean: 1.0,
+        delta_j_z: 0.0,
+        disorder_seed: 123,
+        seed: 456,
+        sample: 1,
+        sweeps: 4,
+        thermalization: 1,
+        binsize: 2,
+        proposal_width: 0.0,
+        wolff_steps: 0,
+        correlation_rmax: 0,
+        correlation_rmax_xy: 0,
+        correlation_rmax_z: 0,
+        j_z_array: Some(vec![1.0, 1.0]),
+    };
+    let checkpoint = ThetaCheckpointRuntime {
+        path: checkpoint_path.clone(),
+        interval: Duration::ZERO,
+        resume: false,
+        heartbeat_path: Some(heartbeat_path.clone()),
+    };
+
+    let result = run_theta_task_with_checkpoint(&task, 0, Some(&checkpoint)).unwrap();
+    assert_eq!(result.measurements, 4);
+    assert!(checkpoint_path.exists());
+    assert!(heartbeat_path.exists());
+    let heartbeat = fs::read_to_string(&heartbeat_path).unwrap();
+    assert!(heartbeat.contains("task_index=0"));
+    assert!(heartbeat.contains("thermalization_sweeps=1"));
+    assert!(heartbeat.contains("measurement_sweeps=4"));
+
+    fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
