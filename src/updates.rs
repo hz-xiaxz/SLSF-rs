@@ -1,4 +1,4 @@
-use rand::Rng;
+use rand::{Rng, RngExt};
 
 use crate::types::{
     minus, plus, validate_proposal_width, validate_temperature, Parameters, ThetaLattice,
@@ -25,19 +25,19 @@ macro_rules! neighbors {
         [
             Neighbor {
                 site: (x_p, $y, $z),
-                coupling: $params.j_xy,
+                coupling: $lattice.j_xy[$z],
             },
             Neighbor {
                 site: (x_m, $y, $z),
-                coupling: $params.j_xy,
+                coupling: $lattice.j_xy[$z],
             },
             Neighbor {
                 site: ($x, y_p, $z),
-                coupling: $params.j_xy,
+                coupling: $lattice.j_xy[$z],
             },
             Neighbor {
                 site: ($x, y_m, $z),
-                coupling: $params.j_xy,
+                coupling: $lattice.j_xy[$z],
             },
             Neighbor {
                 site: ($x, $y, z_p),
@@ -54,13 +54,13 @@ macro_rules! neighbors {
 #[inline]
 fn local_field(
     lattice: &ThetaLattice,
-    params: &Parameters,
+    _params: &Parameters,
     scratch: &ThetaScratch,
     x: usize,
     y: usize,
     z: usize,
 ) -> (f64, f64) {
-    neighbors!(lattice, params, x, y, z)
+    neighbors!(lattice, _params, x, y, z)
         .into_iter()
         .fold((0.0, 0.0), |(hx, hy), neighbor| {
             let (nx, ny, nz) = neighbor.site;
@@ -84,17 +84,17 @@ pub(crate) fn local_metropolis_step_unchecked<R: Rng + ?Sized>(
     width: f64,
     rng: &mut R,
 ) -> bool {
-    let x = rng.gen_range(0..lattice.l_x);
-    let y = rng.gen_range(0..lattice.l_y);
-    let z = rng.gen_range(0..lattice.l_z);
+    let x = rng.random_range(0..lattice.l_x);
+    let y = rng.random_range(0..lattice.l_y);
+    let z = rng.random_range(0..lattice.l_z);
     let idx = lattice.idx(x, y, z);
     let theta_old = lattice.theta[idx];
-    let theta_new = crate::types::wrap_angle(theta_old + width * (2.0 * rng.gen::<f64>() - 1.0));
+    let theta_new = crate::types::wrap_angle(theta_old + width * (2.0 * rng.random::<f64>() - 1.0));
     let (hx, hy) = local_field(lattice, params, scratch, x, y, z);
     let old_energy = -(scratch.cos_theta[idx] * hx + scratch.sin_theta[idx] * hy);
     let delta_energy = local_theta_energy(theta_new, hx, hy) - old_energy;
 
-    if delta_energy <= 0.0 || rng.gen::<f64>() < (-delta_energy / params.temperature).exp() {
+    if delta_energy <= 0.0 || rng.random::<f64>() < (-delta_energy / params.temperature).exp() {
         lattice.theta[idx] = theta_new;
         scratch.update_site(idx, theta_new);
         true
@@ -176,7 +176,7 @@ fn try_add_wolff_neighbor<R: Rng + ?Sized>(
     }
     let ri = (lattice.get(x, y, z) - phi).cos();
     let rj = (lattice.get(xn, yn, zn) - phi).cos();
-    if rng.gen::<f64>() < wolff_add_probability(beta, neighbor.coupling, ri, rj) {
+    if rng.random::<f64>() < wolff_add_probability(beta, neighbor.coupling, ri, rj) {
         scratch.in_cluster[nidx] = true;
         scratch.stack.push((xn, yn, zn));
     }
@@ -195,10 +195,10 @@ pub fn wolff_cluster_step_with_theta_scratch<R: Rng + ?Sized>(
         ts.validate(lattice)?;
     }
     let beta = 1.0 / params.temperature;
-    let phi = TWO_PI * rng.gen::<f64>();
-    let x0 = rng.gen_range(0..lattice.l_x);
-    let y0 = rng.gen_range(0..lattice.l_y);
-    let z0 = rng.gen_range(0..lattice.l_z);
+    let phi = TWO_PI * rng.random::<f64>();
+    let x0 = rng.random_range(0..lattice.l_x);
+    let y0 = rng.random_range(0..lattice.l_y);
+    let z0 = rng.random_range(0..lattice.l_z);
 
     scratch.in_cluster.fill(false);
     scratch.stack.clear();

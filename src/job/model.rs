@@ -159,6 +159,7 @@ pub struct ThetaTask {
     pub l_z: usize,
     pub temperature: f64,
     pub j_xy: f64,
+    pub delta_j_xy: f64,
     pub j_z_mean: f64,
     pub delta_j_z: f64,
     pub disorder_seed: u64,
@@ -172,6 +173,7 @@ pub struct ThetaTask {
     pub correlation_rmax: usize,
     pub correlation_rmax_xy: usize,
     pub correlation_rmax_z: usize,
+    pub j_xy_array: Option<Vec<f64>>,
     pub j_z_array: Option<Vec<f64>>,
 }
 
@@ -297,6 +299,7 @@ pub struct ThetaJobConfig {
     pub l_z: Option<Vec<usize>>,
     pub temperatures: Vec<f64>,
     pub delta_j_z: Vec<f64>,
+    pub delta_j_xy: Vec<f64>,
     pub samples: usize,
     pub base_seed: u64,
     pub j_xy: f64,
@@ -346,7 +349,10 @@ pub struct ThetaModelToml {
     pub samples: Option<usize>,
     pub base_seed: Option<u64>,
     pub j_xy: Option<f64>,
+    pub delta_j_xy: Option<Vec<f64>>,
+    pub djxy: Option<Vec<f64>>,
     pub j_z_mean: Option<f64>,
+    pub j_z: Option<f64>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]

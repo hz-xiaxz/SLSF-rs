@@ -3,16 +3,16 @@ use crate::types::{
     ThetaObservables,
 };
 
-pub fn measure_theta_energy(lattice: &ThetaLattice, params: &Parameters) -> f64 {
+pub fn measure_theta_energy(lattice: &ThetaLattice, _params: &Parameters) -> f64 {
     let mut energy = 0.0;
     for z in 0..lattice.l_z {
         for y in 0..lattice.l_y {
             for x in 0..lattice.l_x {
                 let theta = lattice.get(x, y, z);
-                energy -=
-                    params.j_xy * angle_diff(theta, lattice.get(plus(x, lattice.l_x), y, z)).cos();
-                energy -=
-                    params.j_xy * angle_diff(theta, lattice.get(x, plus(y, lattice.l_y), z)).cos();
+                energy -= lattice.j_xy[z]
+                    * angle_diff(theta, lattice.get(plus(x, lattice.l_x), y, z)).cos();
+                energy -= lattice.j_xy[z]
+                    * angle_diff(theta, lattice.get(x, plus(y, lattice.l_y), z)).cos();
                 energy -= lattice.j_z[z]
                     * angle_diff(theta, lattice.get(x, y, plus(z, lattice.l_z))).cos();
             }
@@ -28,7 +28,7 @@ pub fn measure_magnetization(lattice: &ThetaLattice) -> f64 {
     (mx * mx + my * my).sqrt() / lattice.volume() as f64
 }
 
-pub fn measure_theta_observables(lattice: &ThetaLattice, params: &Parameters) -> ThetaObservables {
+pub fn measure_theta_observables(lattice: &ThetaLattice, _params: &Parameters) -> ThetaObservables {
     let mut energy_sum = 0.0;
     let mut mx_sum = 0.0;
     let mut my_sum = 0.0;
@@ -48,14 +48,14 @@ pub fn measure_theta_observables(lattice: &ThetaLattice, params: &Parameters) ->
                 let dx = angle_diff(theta, lattice.get(plus(x, lattice.l_x), y, z));
                 let dy = angle_diff(theta, lattice.get(x, plus(y, lattice.l_y), z));
                 let dz = angle_diff(theta, lattice.get(x, y, plus(z, lattice.l_z)));
-                let jcx = params.j_xy * dx.cos();
-                let jcy = params.j_xy * dy.cos();
+                let jcx = lattice.j_xy[z] * dx.cos();
+                let jcy = lattice.j_xy[z] * dy.cos();
                 let jcz = lattice.j_z[z] * dz.cos();
                 cos_x += jcx;
                 cos_y += jcy;
                 cos_z += jcz;
-                sin_x += params.j_xy * dx.sin();
-                sin_y += params.j_xy * dy.sin();
+                sin_x += lattice.j_xy[z] * dx.sin();
+                sin_y += lattice.j_xy[z] * dy.sin();
                 sin_z += lattice.j_z[z] * dz.sin();
                 energy_sum -= jcx + jcy + jcz;
             }
@@ -140,7 +140,7 @@ pub fn measure_theta_correlations(
 
 pub fn helicity_sums(
     lattice: &ThetaLattice,
-    params: &Parameters,
+    _params: &Parameters,
 ) -> (f64, f64, f64, f64, f64, f64) {
     let mut cos_x = 0.0;
     let mut cos_y = 0.0;
@@ -156,11 +156,11 @@ pub fn helicity_sums(
                 let dx = angle_diff(theta, lattice.get(plus(x, lattice.l_x), y, z));
                 let dy = angle_diff(theta, lattice.get(x, plus(y, lattice.l_y), z));
                 let dz = angle_diff(theta, lattice.get(x, y, plus(z, lattice.l_z)));
-                cos_x += params.j_xy * dx.cos();
-                cos_y += params.j_xy * dy.cos();
+                cos_x += lattice.j_xy[z] * dx.cos();
+                cos_y += lattice.j_xy[z] * dy.cos();
                 cos_z += lattice.j_z[z] * dz.cos();
-                sin_x += params.j_xy * dx.sin();
-                sin_y += params.j_xy * dy.sin();
+                sin_x += lattice.j_xy[z] * dx.sin();
+                sin_y += lattice.j_xy[z] * dy.sin();
                 sin_z += lattice.j_z[z] * dz.sin();
             }
         }

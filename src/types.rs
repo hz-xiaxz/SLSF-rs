@@ -31,6 +31,7 @@ pub struct ThetaLattice {
     pub l_y: usize,
     pub l_z: usize,
     pub theta: Vec<f64>,
+    pub j_xy: Vec<f64>,
     pub j_z: Vec<f64>,
 }
 
@@ -50,6 +51,7 @@ impl ThetaLattice {
             l_y,
             l_z,
             theta: vec![0.0; l_x * l_y * l_z],
+            j_xy: vec![0.0; l_z],
             j_z: vec![0.0; l_z],
         })
     }

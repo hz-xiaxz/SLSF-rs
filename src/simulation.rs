@@ -38,10 +38,8 @@ pub fn run_theta_simulation<R: Rng + ?Sized>(
     let corr_rmax_z_eff = corr_z_requested.min(lattice.l_z / 2);
 
     initialize_disorder(lattice, params, rng)?;
-    if lattice.j_z.iter().any(|&j| j < 0.0) {
-        return Err(
-            "theta simulation requires nonnegative J_z; got negative layer coupling".to_string(),
-        );
+    if lattice.j_xy.iter().any(|&j| j < 0.0) || lattice.j_z.iter().any(|&j| j < 0.0) {
+        return Err("theta simulation requires nonnegative layer couplings".to_string());
     }
     initialize_angles(lattice, options.init_mode, rng)?;
 

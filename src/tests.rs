@@ -2,6 +2,7 @@ use approx::assert_abs_diff_eq;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use std::fs;
+use std::time::Duration;
 
 use crate::*;
 
@@ -23,8 +24,10 @@ fn theta_lattice_initialization_and_disorder() {
     let mut rng = ChaCha8Rng::seed_from_u64(12345);
     let mut lat = ThetaLattice::new(3, 4, 5).unwrap();
     assert_eq!(lat.theta.len(), 3 * 4 * 5);
+    assert_eq!(lat.j_xy.len(), 5);
     assert_eq!(lat.j_z.len(), 5);
     assert!(lat.theta.iter().all(|&v| v == 0.0));
+    assert!(lat.j_xy.iter().all(|&v| v == 0.0));
     assert!(lat.j_z.iter().all(|&v| v == 0.0));
 
     let params = Parameters::new(1.0, 0.7, 0.0, 2.0);
@@ -34,7 +37,7 @@ fn theta_lattice_initialization_and_disorder() {
     let mut uniform_lat = ThetaLattice::new(1, 1, 200_000).unwrap();
     let uniform_params = Parameters::new(1.0, 1.0, 0.5, 2.0);
     initialize_disorder(&mut uniform_lat, &uniform_params, &mut rng).unwrap();
-    assert!(uniform_lat.j_z.iter().all(|&v| (0.5..=1.5).contains(&v)));
+    assert!(uniform_lat.j_z.iter().all(|&v| v == 0.5 || v == 1.5));
     let disorder_mean = uniform_lat.j_z.iter().sum::<f64>() / uniform_lat.j_z.len() as f64;
     assert_abs_diff_eq!(disorder_mean, 1.0, epsilon = 5e-3);
     let variance = uniform_lat
@@ -43,7 +46,7 @@ fn theta_lattice_initialization_and_disorder() {
         .map(|value| (value - disorder_mean).powi(2))
         .sum::<f64>()
         / (uniform_lat.j_z.len() - 1) as f64;
-    assert_abs_diff_eq!(variance.sqrt(), 0.5 / 3.0_f64.sqrt(), epsilon = 5e-3);
+    assert_abs_diff_eq!(variance.sqrt(), 0.5, epsilon = 5e-3);
 
     assert_err_eq(
         initialize_disorder(&mut lat, &Parameters::new(1.0, 1.0, -0.1, 2.0), &mut rng),
@@ -51,7 +54,7 @@ fn theta_lattice_initialization_and_disorder() {
     );
     assert_err_eq(
         initialize_disorder(&mut lat, &Parameters::new(1.0, 0.05, 0.1, 2.0), &mut rng),
-        "uniform layer disorder requires J_z_mean - δJ_z >= 0",
+        "two-point layer disorder requires J_z_mean - δJ_z >= 0",
     );
 
     initialize_angles(&mut lat, InitMode::Cold, &mut rng).unwrap();
@@ -309,7 +312,7 @@ fn theta_simulation_driver() {
             },
             &mut rng,
         ),
-        "uniform layer disorder requires J_z_mean - δJ_z >= 0",
+        "two-point layer disorder requires J_z_mean - δJ_z >= 0",
     );
 }
 
@@ -397,6 +400,7 @@ fn theta_carlo_entrypoint_job_config_and_binning() {
     assert_eq!(job.tasks[0].l_y, 2);
     assert_eq!(job.tasks[0].l_z, 2);
     assert_eq!(job.tasks[0].binsize, 2);
+    assert_eq!(job.tasks[0].j_xy_array.as_ref().unwrap().len(), 2);
     assert_eq!(job.tasks[0].j_z_array.as_ref().unwrap().len(), 2);
 
     let selected = job
@@ -450,6 +454,7 @@ fn theta_dynamic_scheduler_skips_completed_claims() {
         l_z: 2,
         temperature: 1.0,
         j_xy: 1.0,
+        delta_j_xy: 0.0,
         j_z_mean: 1.0,
         delta_j_z: 0.0,
         disorder_seed: 123,
@@ -463,6 +468,7 @@ fn theta_dynamic_scheduler_skips_completed_claims() {
         correlation_rmax: 0,
         correlation_rmax_xy: 0,
         correlation_rmax_z: 0,
+        j_xy_array: Some(vec![1.0, 1.0]),
         j_z_array: Some(vec![1.0, 1.0]),
     };
     let mut task_b = task_a.clone();
@@ -482,14 +488,80 @@ fn theta_dynamic_scheduler_skips_completed_claims() {
     assert_eq!(result.tasks.len(), 1);
     assert_eq!(result.tasks[0].task_index, 1);
     assert_eq!(result.tasks[0].task.name, "dyn_b");
-    assert!(scheduler_dir.join("task0001.claim").exists());
+    assert!(!scheduler_dir.join("task0001.claim").exists());
     assert!(scheduler_dir.join("task0001.done").exists());
 
-    fs::remove_file(scheduler_dir.join("task0000.done")).unwrap();
-    fs::remove_file(scheduler_dir.join("task0001.claim")).unwrap();
-    fs::remove_file(scheduler_dir.join("task0001.done")).unwrap();
-    fs::remove_dir(scheduler_dir).unwrap();
-    fs::remove_dir(dir).unwrap();
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn theta_dynamic_scheduler_recovers_stale_claims() {
+    let task = ThetaTask {
+        name: "stale_claim".to_string(),
+        l: 2,
+        l_x: 2,
+        l_y: 2,
+        l_z: 2,
+        temperature: 1.0,
+        j_xy: 1.0,
+        delta_j_xy: 0.0,
+        j_z_mean: 1.0,
+        delta_j_z: 0.0,
+        disorder_seed: 123,
+        seed: 456,
+        sample: 1,
+        sweeps: 4,
+        thermalization: 1,
+        binsize: 2,
+        proposal_width: 0.0,
+        wolff_steps: 0,
+        correlation_rmax: 0,
+        correlation_rmax_xy: 0,
+        correlation_rmax_z: 0,
+        j_xy_array: Some(vec![1.0, 1.0]),
+        j_z_array: Some(vec![1.0, 1.0]),
+    };
+    let job = ThetaJob {
+        name: "stale_claim_unit".to_string(),
+        tasks: vec![task],
+    };
+    let dir = std::env::temp_dir().join(format!(
+        "slsf_theta_stale_claim_test_{}",
+        std::process::id()
+    ));
+    let scheduler_dir = dir.join("scheduler");
+    fs::create_dir_all(&scheduler_dir).unwrap();
+    fs::write(scheduler_dir.join("task0000.claim"), "rank=999\n").unwrap();
+
+    assert_eq!(
+        run_theta_job_dynamic(&job, &scheduler_dir, 0, 1)
+            .unwrap()
+            .tasks
+            .len(),
+        0
+    );
+
+    fs::write(scheduler_dir.join("task0000.claim"), "rank=999\n").unwrap();
+    remove_stale_claim_if_needed(
+        &scheduler_dir,
+        0,
+        &scheduler_dir.join("task0000.claim"),
+        Duration::from_secs(0),
+    )
+    .unwrap();
+
+    let result = run_theta_job_dynamic(&job, &scheduler_dir, 0, 1).unwrap();
+    assert_eq!(result.tasks.len(), 1);
+    assert_eq!(result.tasks[0].task_index, 0);
+    assert!(scheduler_dir.join("task0000.done").exists());
+    assert!(!scheduler_dir.join("task0000.claim").exists());
+    assert!(fs::read_dir(&scheduler_dir).unwrap().any(|entry| entry
+        .unwrap()
+        .file_name()
+        .to_string_lossy()
+        .contains("claim.stale")));
+
+    fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
@@ -589,6 +661,7 @@ fn theta_carlo_entrypoint_runs_task_and_roundtrips_result_json() {
         l_z: 2,
         temperature: 1.0,
         j_xy: 1.0,
+        delta_j_xy: 0.0,
         j_z_mean: 1.0,
         delta_j_z: 0.0,
         disorder_seed: 23,
@@ -602,6 +675,7 @@ fn theta_carlo_entrypoint_runs_task_and_roundtrips_result_json() {
         correlation_rmax: 1,
         correlation_rmax_xy: 1,
         correlation_rmax_z: 1,
+        j_xy_array: Some(vec![1.0, 1.0]),
         j_z_array: Some(vec![1.0, 1.0]),
     };
     let job = ThetaJob {

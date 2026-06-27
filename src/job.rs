@@ -3,17 +3,17 @@ use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use clap::{error::ErrorKind, Args as ClapArgs, Parser, Subcommand};
 use hdf5_pure::{
     CharacterSet, Datatype, File as Hdf5File, FileBuilder, Group, GroupBuilder, StringPadding,
 };
-use rand::SeedableRng;
+use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use serde::{Deserialize, Serialize};
 
-use crate::initialization::{initialize_angles, initialize_disorder};
+use crate::initialization::{initialize_angles, initialize_two_point_layer_disorder};
 use crate::observables::{measure_theta_correlations, measure_theta_observables};
 use crate::types::{InitMode, Parameters, ThetaLattice, ThetaScratch, WolffScratch};
 use crate::updates::{metropolis_sweep_with_scratch, wolff_cluster_step_with_theta_scratch};

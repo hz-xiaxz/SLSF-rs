@@ -1,3 +1,123 @@
+const CLAIM_STALE_AFTER: Duration = Duration::from_secs(6 * 60 * 60);
+
+fn task_marker_path(scheduler_dir: &Path, task_index: usize, extension: &str) -> PathBuf {
+    scheduler_dir.join(format!("task{task_index:04}.{extension}"))
+}
+
+fn current_unix_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+fn claim_age(path: &Path) -> Option<Duration> {
+    fs::metadata(path)
+        .ok()
+        .and_then(|metadata| metadata.modified().ok())
+        .and_then(|modified| SystemTime::now().duration_since(modified).ok())
+}
+
+pub(crate) fn remove_stale_claim_if_needed(
+    scheduler_dir: &Path,
+    task_index: usize,
+    claim_path: &Path,
+    stale_after: Duration,
+) -> Result<(), String> {
+    if task_marker_path(scheduler_dir, task_index, "done").exists() {
+        return Ok(());
+    }
+    let Some(age) = claim_age(claim_path) else {
+        return Ok(());
+    };
+    if age < stale_after {
+        return Ok(());
+    }
+
+    let stale_path = scheduler_dir.join(format!(
+        "task{task_index:04}.claim.stale.{}.{}",
+        current_unix_seconds(),
+        std::process::id()
+    ));
+    match fs::rename(claim_path, &stale_path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(format!(
+            "failed to retire stale claim {}: {err}",
+            claim_path.display()
+        )),
+    }
+}
+
+fn try_claim_task(
+    scheduler_dir: &Path,
+    task_index: usize,
+    rank: usize,
+    world_size: usize,
+) -> Result<Option<PathBuf>, String> {
+    let done_path = task_marker_path(scheduler_dir, task_index, "done");
+    if done_path.exists() {
+        return Ok(None);
+    }
+
+    let claim_path = task_marker_path(scheduler_dir, task_index, "claim");
+    remove_stale_claim_if_needed(scheduler_dir, task_index, &claim_path, CLAIM_STALE_AFTER)?;
+    match OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&claim_path)
+    {
+        Ok(mut claim) => {
+            writeln!(claim, "task_index={task_index}").map_err(|err| err.to_string())?;
+            writeln!(claim, "rank={rank}").map_err(|err| err.to_string())?;
+            writeln!(claim, "world_size={world_size}").map_err(|err| err.to_string())?;
+            writeln!(claim, "pid={}", std::process::id()).map_err(|err| err.to_string())?;
+            writeln!(claim, "claimed_at_unix={}", current_unix_seconds())
+                .map_err(|err| err.to_string())?;
+            Ok(Some(claim_path))
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Ok(None),
+        Err(err) => Err(format!(
+            "failed to claim task {task_index} at {}: {err}",
+            claim_path.display()
+        )),
+    }
+}
+
+fn mark_task_done(scheduler_dir: &Path, task_index: usize, claim_path: &Path) -> Result<(), String> {
+    let done_path = task_marker_path(scheduler_dir, task_index, "done");
+    let tmp_done_path = scheduler_dir.join(format!(
+        "task{task_index:04}.done.tmp.{}.{}",
+        current_unix_seconds(),
+        std::process::id()
+    ));
+    {
+        let mut done = File::create(&tmp_done_path).map_err(|err| err.to_string())?;
+        writeln!(done, "task_index={task_index}").map_err(|err| err.to_string())?;
+        writeln!(done, "completed_at_unix={}", current_unix_seconds())
+            .map_err(|err| err.to_string())?;
+        done.sync_all().map_err(|err| err.to_string())?;
+    }
+    fs::rename(&tmp_done_path, &done_path).map_err(|err| err.to_string())?;
+    match fs::remove_file(claim_path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(format!(
+            "failed to remove claim {} after completing task {task_index}: {err}",
+            claim_path.display()
+        )),
+    }
+}
+
+fn dynamic_task_order(task_count: usize, rank: usize, world_size: usize) -> impl Iterator<Item = usize> {
+    let offset = if task_count == 0 {
+        0
+    } else {
+        rank.saturating_mul(task_count) / world_size.max(1)
+    };
+    (0..task_count).map(move |step| (offset + step) % task_count)
+}
+
 pub fn run_theta_job_dynamic(
     job: &ThetaJob,
     scheduler_dir: impl AsRef<Path>,
@@ -8,23 +128,14 @@ pub fn run_theta_job_dynamic(
     fs::create_dir_all(scheduler_dir).map_err(|err| err.to_string())?;
 
     let mut tasks = Vec::new();
-    for (task_index, task) in job.tasks.iter().enumerate() {
-        let done_path = scheduler_dir.join(format!("task{task_index:04}.done"));
-        if done_path.exists() {
-            continue;
-        }
-        let claim_path = scheduler_dir.join(format!("task{task_index:04}.claim"));
-        let claim = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&claim_path);
-        let Ok(mut claim) = claim else {
+    for task_index in dynamic_task_order(job.tasks.len(), rank, world_size) {
+        let task = &job.tasks[task_index];
+        let Some(claim_path) = try_claim_task(scheduler_dir, task_index, rank, world_size)? else {
             continue;
         };
-        writeln!(claim, "pid={} rank={rank}", std::process::id()).map_err(|err| err.to_string())?;
         let mut task_result = run_theta_task(task)?;
         task_result.task_index = task_index;
-        File::create(&done_path).map_err(|err| err.to_string())?;
+        mark_task_done(scheduler_dir, task_index, &claim_path)?;
         tasks.push(task_result);
     }
 
@@ -178,7 +289,7 @@ fn theta_job_status(cfg: &ThetaJobConfig, options: &ThetaRunOptions) -> Result<S
         .tasks
         .iter()
         .enumerate()
-        .filter(|(idx, _)| scheduler_dir.join(format!("task{idx:04}.done")).exists())
+        .filter(|(idx, _)| task_marker_path(&scheduler_dir, *idx, "done").exists())
         .count();
     let completed_rank_tasks = (0..options.world_size())
         .filter_map(|rank| {
@@ -252,24 +363,15 @@ pub fn run_theta_job_dynamic_with_options(
     fs::create_dir_all(&scheduler_dir).map_err(|err| err.to_string())?;
     let started = Instant::now();
     let mut tasks = Vec::new();
-    for (task_index, task) in job.tasks.iter().enumerate() {
-        let done_path = scheduler_dir.join(format!("task{task_index:04}.done"));
-        if done_path.exists() {
-            continue;
-        }
-        let claim_path = scheduler_dir.join(format!("task{task_index:04}.claim"));
-        let claim = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&claim_path);
-        let Ok(mut claim) = claim else {
+    for task_index in dynamic_task_order(job.tasks.len(), rank, world_size) {
+        let task = &job.tasks[task_index];
+        let Some(claim_path) = try_claim_task(&scheduler_dir, task_index, rank, world_size)? else {
             continue;
         };
-        writeln!(claim, "pid={} rank={rank}", std::process::id()).map_err(|err| err.to_string())?;
         let checkpoint =
             checkpoint_runtime_for_task(&job.name, &options, cfg.checkpoint_time, task_index);
         let task_result = run_theta_task_with_checkpoint(task, task_index, checkpoint.as_ref())?;
-        File::create(&done_path).map_err(|err| err.to_string())?;
+        mark_task_done(&scheduler_dir, task_index, &claim_path)?;
         tasks.push(task_result);
     }
     let result = ThetaJobResult {

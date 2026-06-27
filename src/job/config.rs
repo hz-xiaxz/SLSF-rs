@@ -1,16 +1,17 @@
 impl Default for ThetaJobConfig {
     fn default() -> Self {
         Self {
-            l: vec![16],
+            l: (4..=20).collect(),
             l_x: None,
             l_y: None,
             l_z: None,
             temperatures: vec![2.8, 2.9, 3.0, 3.1, 3.2, 3.3],
-            delta_j_z: vec![0.8],
+            delta_j_z: vec![0.0],
+            delta_j_xy: vec![0.0],
             samples: 16,
             base_seed: 20260414,
             j_xy: 1.0,
-            j_z_mean: 1.0,
+            j_z_mean: 0.1,
             sweeps: 20_000,
             thermalization: 5_000,
             binsize: 50,
@@ -57,6 +58,9 @@ impl ThetaJobConfig {
             if let Some(value) = model.delta_j_z.or(model.djz) {
                 cfg.delta_j_z = value;
             }
+            if let Some(value) = model.delta_j_xy.or(model.djxy) {
+                cfg.delta_j_xy = value;
+            }
             if let Some(value) = model.samples {
                 cfg.samples = value;
             }
@@ -66,7 +70,7 @@ impl ThetaJobConfig {
             if let Some(value) = model.j_xy {
                 cfg.j_xy = value;
             }
-            if let Some(value) = model.j_z_mean {
+            if let Some(value) = model.j_z_mean.or(model.j_z) {
                 cfg.j_z_mean = value;
             }
         }
@@ -113,6 +117,7 @@ impl ThetaJobConfig {
         cfg.l_z = parse_optional_env_list("XY_LZ")?;
         cfg.temperatures = parse_env_list("XY_T", &cfg.temperatures)?;
         cfg.delta_j_z = parse_env_list("XY_DJZ", &cfg.delta_j_z)?;
+        cfg.delta_j_xy = parse_env_list("XY_DJXY", &cfg.delta_j_xy)?;
         cfg.samples = parse_env_value("XY_SAMPLES", cfg.samples)?;
         cfg.base_seed = parse_env_value("XY_BASE_SEED", cfg.base_seed)?;
         cfg.j_xy = parse_env_value("XY_JXY", cfg.j_xy)?;
@@ -131,8 +136,9 @@ impl ThetaJobConfig {
             parse_optional_env_value("XY_CORR_RMAX_Z")?.or(cfg.correlation_rmax);
         cfg.job_name = std::env::var("XY_JOB_NAME").unwrap_or_else(|_| {
             format!(
-                "xy_carlo_L{}_dJz{}",
+                "xy_carlo_L{}_dJxy{}_dJz{}",
                 join_display(&cfg.l),
+                join_display(&cfg.delta_j_xy),
                 join_display(&cfg.delta_j_z)
             )
         });
@@ -157,49 +163,63 @@ impl ThetaJobConfig {
         }
         let mut tasks = Vec::new();
         for (l_x, l_y, l_z, l) in self.lattice_specs() {
-            for &delta_j_z in &self.delta_j_z {
-                for &temperature in &self.temperatures {
-                    for sample in 1..=self.samples {
-                        let disorder_seed = self.base_seed + sample as u64 - 1;
-                        let seed = self.base_seed
-                            + 100_000 * l_z as u64
-                            + 1_000 * sample as u64
-                            + (100.0 * temperature).round() as u64
-                            + (1_000.0 * delta_j_z).round() as u64;
-                        let j_z_array = generate_layer_disorder_values(
-                            l_z,
-                            self.j_z_mean,
-                            delta_j_z,
-                            disorder_seed,
-                        )?;
-                        tasks.push(ThetaTask {
-                            name: format!(
-                                "L{}x{}x{}_T{:.6}_dJz{:.6}_sample{}",
-                                l_x, l_y, l_z, temperature, delta_j_z, sample
-                            ),
-                            l,
-                            l_x,
-                            l_y,
-                            l_z,
-                            temperature,
-                            j_xy: self.j_xy,
-                            j_z_mean: self.j_z_mean,
-                            delta_j_z,
-                            disorder_seed,
-                            seed,
-                            sample,
-                            sweeps: self.sweeps,
-                            thermalization: self.thermalization,
-                            binsize: self.binsize,
-                            proposal_width: self.proposal_width,
-                            wolff_steps: self.wolff_steps,
-                            correlation_rmax: self.correlation_rmax.unwrap_or(l_z / 2),
-                            correlation_rmax_xy: self
-                                .correlation_rmax_xy
-                                .unwrap_or_else(|| l_x.min(l_y) / 2),
-                            correlation_rmax_z: self.correlation_rmax_z.unwrap_or(l_z / 2),
-                            j_z_array: Some(j_z_array),
-                        });
+            for &delta_j_xy in &self.delta_j_xy {
+                for &delta_j_z in &self.delta_j_z {
+                    for &temperature in &self.temperatures {
+                        for sample in 1..=self.samples {
+                            let disorder_seed = self.base_seed + sample as u64 - 1;
+                            let seed = self.base_seed
+                                + 100_000 * l_z as u64
+                                + 1_000 * sample as u64
+                                + (100.0 * temperature).round() as u64
+                                + (1_000.0 * delta_j_xy).round() as u64 * 10_000
+                                + (1_000.0 * delta_j_z).round() as u64;
+                            let mut disorder_rng = ChaCha8Rng::seed_from_u64(disorder_seed);
+                            let j_xy_array = generate_layer_disorder_values(
+                                l_z,
+                                self.j_xy,
+                                delta_j_xy,
+                                &mut disorder_rng,
+                                "J_xy",
+                            )?;
+                            let j_z_array = generate_layer_disorder_values(
+                                l_z,
+                                self.j_z_mean,
+                                delta_j_z,
+                                &mut disorder_rng,
+                                "J_z",
+                            )?;
+                            tasks.push(ThetaTask {
+                                name: format!(
+                                    "L{}x{}x{}_T{:.6}_dJxy{:.6}_dJz{:.6}_sample{}",
+                                    l_x, l_y, l_z, temperature, delta_j_xy, delta_j_z, sample
+                                ),
+                                l,
+                                l_x,
+                                l_y,
+                                l_z,
+                                temperature,
+                                j_xy: self.j_xy,
+                                delta_j_xy,
+                                j_z_mean: self.j_z_mean,
+                                delta_j_z,
+                                disorder_seed,
+                                seed,
+                                sample,
+                                sweeps: self.sweeps,
+                                thermalization: self.thermalization,
+                                binsize: self.binsize,
+                                proposal_width: self.proposal_width,
+                                wolff_steps: self.wolff_steps,
+                                correlation_rmax: self.correlation_rmax.unwrap_or(l_z / 2),
+                                correlation_rmax_xy: self
+                                    .correlation_rmax_xy
+                                    .unwrap_or_else(|| l_x.min(l_y) / 2),
+                                correlation_rmax_z: self.correlation_rmax_z.unwrap_or(l_z / 2),
+                                j_xy_array: Some(j_xy_array),
+                                j_z_array: Some(j_z_array),
+                            });
+                        }
                     }
                 }
             }

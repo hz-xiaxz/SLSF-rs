@@ -56,20 +56,16 @@ impl ObservableSeries {
     }
 }
 
-pub fn generate_layer_disorder_values(
+pub fn generate_layer_disorder_values<R: Rng + ?Sized>(
     l_z: usize,
-    j_z_mean: f64,
-    delta_j_z: f64,
-    disorder_seed: u64,
+    mean: f64,
+    delta: f64,
+    rng: &mut R,
+    coupling_name: &str,
 ) -> Result<Vec<f64>, String> {
-    let mut lattice = ThetaLattice::new(1, 1, l_z)?;
-    let mut rng = ChaCha8Rng::seed_from_u64(disorder_seed);
-    initialize_disorder(
-        &mut lattice,
-        &Parameters::new(1.0, j_z_mean, delta_j_z, 1.0),
-        &mut rng,
-    )?;
-    Ok(lattice.j_z)
+    let mut values = vec![0.0; l_z];
+    initialize_two_point_layer_disorder(&mut values, mean, delta, rng, coupling_name)?;
+    Ok(values)
 }
 
 pub fn run_theta_task(task: &ThetaTask) -> Result<ThetaTaskResult, String> {
@@ -83,6 +79,22 @@ fn run_theta_task_with_checkpoint(
 ) -> Result<ThetaTaskResult, String> {
     let params = task.params();
     let mut lattice = ThetaLattice::new(task.l_x, task.l_y, task.l_z)?;
+    let mut rng = ChaCha8Rng::seed_from_u64(task.seed);
+    match &task.j_xy_array {
+        Some(j_xy_array) => {
+            if j_xy_array.len() != task.l_z {
+                return Err("J_xy_array length must match Lz".to_string());
+            }
+            lattice.j_xy.clone_from(j_xy_array);
+        }
+        None => initialize_two_point_layer_disorder(
+            &mut lattice.j_xy,
+            task.j_xy,
+            task.delta_j_xy,
+            &mut rng,
+            "J_xy",
+        )?,
+    }
     match &task.j_z_array {
         Some(j_z_array) => {
             if j_z_array.len() != task.l_z {
@@ -90,19 +102,17 @@ fn run_theta_task_with_checkpoint(
             }
             lattice.j_z.clone_from(j_z_array);
         }
-        None => initialize_disorder(
-            &mut lattice,
-            &params,
-            &mut ChaCha8Rng::seed_from_u64(task.disorder_seed),
+        None => initialize_two_point_layer_disorder(
+            &mut lattice.j_z,
+            task.j_z_mean,
+            task.delta_j_z,
+            &mut rng,
+            "J_z",
         )?,
     }
-    if lattice.j_z.iter().any(|&j| j < 0.0) {
-        return Err(
-            "theta simulation requires nonnegative J_z; got negative layer coupling".to_string(),
-        );
+    if lattice.j_xy.iter().any(|&j| j < 0.0) || lattice.j_z.iter().any(|&j| j < 0.0) {
+        return Err("theta simulation requires nonnegative layer couplings".to_string());
     }
-
-    let mut rng = ChaCha8Rng::seed_from_u64(task.seed);
     let mut thermalization_start = 0usize;
     let mut measurement_start = 0usize;
     let mut acceptance_sum = 0.0;
