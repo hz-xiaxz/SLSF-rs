@@ -111,6 +111,7 @@ fn run_theta_command(command: ThetaCommand) -> Result<String, String> {
             let paths = write_theta_job_checkpoints(&result, dir)?;
             Ok(format!("wrote {} checkpoint file(s)", paths.len()))
         }
+        ThetaCommand::Dataframe(args) => run_result_tool_command(args),
         ThetaCommand::Status(args) => {
             let (cfg, options) = load_config_and_options(&args)?;
             theta_job_status(&cfg, &options)
@@ -120,6 +121,47 @@ fn run_theta_command(command: ThetaCommand) -> Result<String, String> {
             delete_theta_job_outputs(&cfg, &options)?;
             Ok("deleted theta job outputs".to_string())
         }
+    }
+}
+
+fn run_result_tool_command(args: ResultToolArgs) -> Result<String, String> {
+    let table_path = args.output.clone().unwrap_or_else(|| {
+        args.result_json
+            .with_file_name(format!(
+                "{}.tsv",
+                args.result_json
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .unwrap_or("results")
+            ))
+    });
+    crate::result_tools::write_dataframe(&args.result_json, &table_path)?;
+
+    if args.plot {
+        let plot_path = args
+            .plot_output
+            .clone()
+            .unwrap_or_else(|| table_path.with_extension(format!("{}.png", args.observable)));
+        let script_path = args
+            .script_output
+            .clone()
+            .unwrap_or_else(|| table_path.with_extension(format!("{}.gnuplot", args.observable)));
+        crate::result_tools::write_gnuplot_script(
+            &table_path,
+            &script_path,
+            &plot_path,
+            &args.observable,
+        )?;
+        crate::result_tools::plot_with_gnuplot(&script_path)?;
+        Ok(format!(
+            "wrote {}; plotted {} to {} using {}",
+            table_path.display(),
+            args.observable,
+            plot_path.display(),
+            script_path.display()
+        ))
+    } else {
+        Ok(format!("wrote {}", table_path.display()))
     }
 }
 

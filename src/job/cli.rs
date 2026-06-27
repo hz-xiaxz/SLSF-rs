@@ -74,6 +74,8 @@ pub enum ThetaCommand {
     RunDynamic(CommandArgs),
     MpiRun(CommandArgs),
     Checkpoint(CommandArgs),
+    #[command(alias = "df")]
+    Dataframe(ResultToolArgs),
     #[command(alias = "s")]
     Status(CommandArgs),
     #[command(alias = "d")]
@@ -108,4 +110,19 @@ pub struct CommandArgs {
     pub rank: Option<usize>,
     #[arg(long)]
     pub world_size: Option<usize>,
+}
+
+#[derive(Debug, Clone, ClapArgs)]
+pub struct ResultToolArgs {
+    pub result_json: PathBuf,
+    #[arg(short, long)]
+    pub output: Option<PathBuf>,
+    #[arg(long)]
+    pub plot: bool,
+    #[arg(long, default_value = "Energy")]
+    pub observable: String,
+    #[arg(long)]
+    pub plot_output: Option<PathBuf>,
+    #[arg(long)]
+    pub script_output: Option<PathBuf>,
 }

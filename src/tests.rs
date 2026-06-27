@@ -905,6 +905,28 @@ fn theta_carlo_entrypoint_runs_task_and_roundtrips_result_json() {
     assert_eq!(merged.tasks[0].task.name, "tiny");
     assert_eq!(merged.tasks[1].task.name, "tiny_rank1");
 
+    let table_path = out_dir.join("tiny_job.tsv");
+    let dataframe_message = run_theta_job_command([
+        "slsf",
+        "dataframe",
+        path.to_str().unwrap(),
+        "--output",
+        table_path.to_str().unwrap(),
+    ])
+    .unwrap();
+    assert!(dataframe_message.contains("wrote"));
+    let table = std::fs::read_to_string(&table_path).unwrap();
+    assert!(table.contains("job_name\trank\tworld_size\ttask_index\ttask_name\tL\tLx\tLy\tLz\tT"));
+    assert!(table.contains("Energy\tEnergy_error\tEnergy_measurement"));
+    assert!(table.contains("tiny_job\t0\t1\t0\ttiny\t2\t2\t2\t2\t1.0000000000000000"));
+
+    let script_path = out_dir.join("tiny_job.gnuplot");
+    let plot_path = out_dir.join("tiny_job.png");
+    write_gnuplot_script(&table_path, &script_path, &plot_path, "Energy").unwrap();
+    let script = std::fs::read_to_string(&script_path).unwrap();
+    assert!(script.contains("set datafile separator '\\t'"));
+    assert!(script.contains("using 'T':'Energy':'Lx'"));
+
     let mpi_root =
         std::env::temp_dir().join(format!("slsf_theta_mpi_cli_test_{}", std::process::id()));
     let mpi_out = mpi_root.join("out");
@@ -964,6 +986,8 @@ corr_rmax = 0
 
     std::fs::remove_file(path).unwrap();
     std::fs::remove_file(rank1_path).unwrap();
+    std::fs::remove_file(table_path).unwrap();
+    std::fs::remove_file(script_path).unwrap();
     std::fs::remove_file(&measurement_paths[0]).unwrap();
     std::fs::remove_file(&checkpoint_paths[0]).unwrap();
     std::fs::remove_dir(out_dir.join("task0001")).unwrap();
