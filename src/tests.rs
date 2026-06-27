@@ -1,6 +1,5 @@
 use approx::assert_abs_diff_eq;
 use rand::SeedableRng;
-use rand_chacha::ChaCha8Rng;
 use std::fs;
 use std::time::Duration;
 
@@ -21,7 +20,7 @@ fn theta_lattice_initialization_and_disorder() {
     assert!(ThetaLattice::new(2, 0, 2).is_err());
     assert!(ThetaLattice::new(2, 2, 0).is_err());
 
-    let mut rng = ChaCha8Rng::seed_from_u64(12345);
+    let mut rng = FastRng::seed_from_u64(12345);
     let mut lat = ThetaLattice::new(3, 4, 5).unwrap();
     assert_eq!(lat.theta.len(), 3 * 4 * 5);
     assert_eq!(lat.j_xy.len(), 5);
@@ -65,7 +64,7 @@ fn theta_lattice_initialization_and_disorder() {
 
 #[test]
 fn theta_energy_magnetization_and_correlations() {
-    let mut rng = ChaCha8Rng::seed_from_u64(11);
+    let mut rng = FastRng::seed_from_u64(11);
     let mut lat = ThetaLattice::new(2, 2, 2).unwrap();
     let params = Parameters::new(1.5, 0.5, 0.0, 1.0);
     initialize_disorder(&mut lat, &params, &mut rng).unwrap();
@@ -111,7 +110,7 @@ fn theta_energy_magnetization_and_correlations() {
 
 #[test]
 fn theta_metropolis_updates_validate_and_keep_angles_wrapped() {
-    let mut rng = ChaCha8Rng::seed_from_u64(12);
+    let mut rng = FastRng::seed_from_u64(12);
     let mut lat = ThetaLattice::new(3, 3, 3).unwrap();
     let params = Parameters::new(1.0, 0.8, 0.0, 2.0);
     initialize_disorder(&mut lat, &params, &mut rng).unwrap();
@@ -142,7 +141,7 @@ fn theta_metropolis_updates_validate_and_keep_angles_wrapped() {
 
 #[test]
 fn theta_temperature_validation_and_helicity() {
-    let mut rng = ChaCha8Rng::seed_from_u64(13);
+    let mut rng = FastRng::seed_from_u64(13);
     let mut lat = ThetaLattice::new(3, 3, 3).unwrap();
     let params = Parameters::new(1.2, 0.6, 0.0, 0.5);
     initialize_disorder(&mut lat, &params, &mut rng).unwrap();
@@ -188,7 +187,7 @@ fn theta_temperature_validation_and_helicity() {
 
 #[test]
 fn theta_simulation_driver() {
-    let mut rng = ChaCha8Rng::seed_from_u64(14);
+    let mut rng = FastRng::seed_from_u64(14);
     let mut lat = ThetaLattice::new(3, 3, 3).unwrap();
     let params = Parameters::new(1.0, 1.0, 0.0, 0.5);
     let options = ThetaSimulationOptions {
@@ -345,7 +344,7 @@ fn theta_wolff_cluster_update() {
     assert_abs_diff_eq!(reflected_twice, theta, epsilon = 1e-12);
     assert!((0.0..TWO_PI).contains(&reflected));
 
-    let mut rng = ChaCha8Rng::seed_from_u64(15);
+    let mut rng = FastRng::seed_from_u64(15);
     let mut lat = ThetaLattice::new(4, 4, 4).unwrap();
     let params = Parameters::new(1.0, 1.0, 0.0, 1.0);
     initialize_disorder(&mut lat, &params, &mut rng).unwrap();
