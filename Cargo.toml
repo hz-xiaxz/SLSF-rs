@@ -16,3 +16,8 @@ toml = "0.8"
 
 [dev-dependencies]
 approx = "0.5"
+
+[profile.profiling]
+inherits = "release"
+debug = true
+strip = false

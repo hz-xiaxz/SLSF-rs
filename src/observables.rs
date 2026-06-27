@@ -1,7 +1,12 @@
 use crate::types::{
     angle_diff, plus, validate_temperature, Parameters, ThetaCorrelations, ThetaLattice,
-    ThetaObservables,
+    ThetaObservables, ThetaScratch,
 };
+
+#[inline]
+fn diff_cos_sin(cos_a: f64, sin_a: f64, cos_b: f64, sin_b: f64) -> (f64, f64) {
+    (cos_a * cos_b + sin_a * sin_b, sin_a * cos_b - cos_a * sin_b)
+}
 
 pub fn measure_theta_energy(lattice: &ThetaLattice, params: &Parameters) -> f64 {
     let mut energy = 0.0;
@@ -29,6 +34,19 @@ pub fn measure_magnetization(lattice: &ThetaLattice) -> f64 {
 }
 
 pub fn measure_theta_observables(lattice: &ThetaLattice, params: &Parameters) -> ThetaObservables {
+    let scratch = ThetaScratch::new(lattice);
+    measure_theta_observables_with_scratch(lattice, params, &scratch)
+}
+
+pub fn measure_theta_observables_with_scratch(
+    lattice: &ThetaLattice,
+    params: &Parameters,
+    scratch: &ThetaScratch,
+) -> ThetaObservables {
+    scratch
+        .validate(lattice)
+        .expect("theta scratch dimensions must match lattice dimensions");
+
     let mut energy_sum = 0.0;
     let mut mx_sum = 0.0;
     let mut my_sum = 0.0;
@@ -42,21 +60,42 @@ pub fn measure_theta_observables(lattice: &ThetaLattice, params: &Parameters) ->
     for z in 0..lattice.l_z {
         for y in 0..lattice.l_y {
             for x in 0..lattice.l_x {
-                let theta = lattice.get(x, y, z);
-                mx_sum += theta.cos();
-                my_sum += theta.sin();
-                let dx = angle_diff(theta, lattice.get(plus(x, lattice.l_x), y, z));
-                let dy = angle_diff(theta, lattice.get(x, plus(y, lattice.l_y), z));
-                let dz = angle_diff(theta, lattice.get(x, y, plus(z, lattice.l_z)));
-                let jcx = params.j_xy * dx.cos();
-                let jcy = params.j_xy * dy.cos();
-                let jcz = lattice.j_z[z] * dz.cos();
+                let idx = lattice.idx(x, y, z);
+                let cos_theta = scratch.cos_theta[idx];
+                let sin_theta = scratch.sin_theta[idx];
+                mx_sum += cos_theta;
+                my_sum += sin_theta;
+
+                let x_idx = lattice.idx(plus(x, lattice.l_x), y, z);
+                let y_idx = lattice.idx(x, plus(y, lattice.l_y), z);
+                let z_idx = lattice.idx(x, y, plus(z, lattice.l_z));
+                let (dx_cos, dx_sin) = diff_cos_sin(
+                    cos_theta,
+                    sin_theta,
+                    scratch.cos_theta[x_idx],
+                    scratch.sin_theta[x_idx],
+                );
+                let (dy_cos, dy_sin) = diff_cos_sin(
+                    cos_theta,
+                    sin_theta,
+                    scratch.cos_theta[y_idx],
+                    scratch.sin_theta[y_idx],
+                );
+                let (dz_cos, dz_sin) = diff_cos_sin(
+                    cos_theta,
+                    sin_theta,
+                    scratch.cos_theta[z_idx],
+                    scratch.sin_theta[z_idx],
+                );
+                let jcx = params.j_xy * dx_cos;
+                let jcy = params.j_xy * dy_cos;
+                let jcz = lattice.j_z[z] * dz_cos;
                 cos_x += jcx;
                 cos_y += jcy;
                 cos_z += jcz;
-                sin_x += params.j_xy * dx.sin();
-                sin_y += params.j_xy * dy.sin();
-                sin_z += lattice.j_z[z] * dz.sin();
+                sin_x += params.j_xy * dx_sin;
+                sin_y += params.j_xy * dy_sin;
+                sin_z += lattice.j_z[z] * dz_sin;
                 energy_sum -= jcx + jcy + jcz;
             }
         }

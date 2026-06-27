@@ -197,7 +197,7 @@ pub(crate) fn run_theta_task_with_checkpoint(
         let sweep_seconds = sweep_started.elapsed().as_secs_f64();
 
         let measure_started = Instant::now();
-        let obs = measure_theta_observables(&lattice, &params);
+        let obs = measure_theta_observables_with_scratch(&lattice, &params, &theta_scratch);
         let rho_x = obs.cos_x / volume - beta * obs.sin_x.powi(2) / volume;
         let rho_y = obs.cos_y / volume - beta * obs.sin_y.powi(2) / volume;
         let rho_z = obs.cos_z / volume - beta * obs.sin_z.powi(2) / volume;

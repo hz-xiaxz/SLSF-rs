@@ -1,7 +1,7 @@
 use rand::Rng;
 
 use crate::initialization::{initialize_angles, initialize_disorder};
-use crate::observables::{measure_theta_correlations, measure_theta_observables};
+use crate::observables::{measure_theta_correlations, measure_theta_observables_with_scratch};
 use crate::types::{
     validate_proposal_width, validate_temperature, Parameters, ThetaLattice, ThetaScratch,
     ThetaSimulationOptions, ThetaSimulationResult, WolffScratch,
@@ -94,7 +94,7 @@ pub fn run_theta_simulation<R: Rng + ?Sized>(
         }
 
         if step % options.measure_interval == 0 {
-            let obs = measure_theta_observables(lattice, params);
+            let obs = measure_theta_observables_with_scratch(lattice, params, &theta_scratch);
             energy.push(obs.energy);
             cos_x.push(obs.cos_x);
             cos_y.push(obs.cos_y);

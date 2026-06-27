@@ -14,7 +14,7 @@ use rand_chacha::ChaCha8Rng;
 use serde::{Deserialize, Serialize};
 
 use crate::initialization::{initialize_angles, initialize_disorder};
-use crate::observables::{measure_theta_correlations, measure_theta_observables};
+use crate::observables::{measure_theta_correlations, measure_theta_observables_with_scratch};
 use crate::types::{InitMode, Parameters, ThetaLattice, ThetaScratch, WolffScratch};
 use crate::updates::{metropolis_sweep_with_scratch, wolff_cluster_step_with_theta_scratch};
 

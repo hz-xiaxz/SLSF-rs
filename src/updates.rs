@@ -73,8 +73,8 @@ fn local_field(
 }
 
 #[inline]
-fn local_theta_energy(theta: f64, hx: f64, hy: f64) -> f64 {
-    -(theta.cos() * hx + theta.sin() * hy)
+fn local_theta_energy_from_trig(sin_theta: f64, cos_theta: f64, hx: f64, hy: f64) -> f64 {
+    -(cos_theta * hx + sin_theta * hy)
 }
 
 pub(crate) fn local_metropolis_step_unchecked<R: Rng + ?Sized>(
@@ -90,13 +90,15 @@ pub(crate) fn local_metropolis_step_unchecked<R: Rng + ?Sized>(
     let idx = lattice.idx(x, y, z);
     let theta_old = lattice.theta[idx];
     let theta_new = crate::types::wrap_angle(theta_old + width * (2.0 * rng.gen::<f64>() - 1.0));
+    let (new_sin, new_cos) = theta_new.sin_cos();
     let (hx, hy) = local_field(lattice, params, scratch, x, y, z);
-    let old_energy = -(scratch.cos_theta[idx] * hx + scratch.sin_theta[idx] * hy);
-    let delta_energy = local_theta_energy(theta_new, hx, hy) - old_energy;
+    let old_energy =
+        local_theta_energy_from_trig(scratch.sin_theta[idx], scratch.cos_theta[idx], hx, hy);
+    let delta_energy = local_theta_energy_from_trig(new_sin, new_cos, hx, hy) - old_energy;
 
     if delta_energy <= 0.0 || rng.gen::<f64>() < (-delta_energy / params.temperature).exp() {
         lattice.theta[idx] = theta_new;
-        scratch.update_site(idx, theta_new);
+        scratch.set_site_trig(idx, new_sin, new_cos);
         true
     } else {
         false
@@ -162,8 +164,11 @@ pub fn wolff_reflect_angle(theta: f64, phi: f64) -> f64 {
 fn try_add_wolff_neighbor<R: Rng + ?Sized>(
     lattice: &ThetaLattice,
     scratch: &mut WolffScratch,
+    theta_scratch: Option<&ThetaScratch>,
     beta: f64,
     phi: f64,
+    sin_phi: f64,
+    cos_phi: f64,
     site: Site,
     neighbor: Neighbor,
     rng: &mut R,
@@ -174,8 +179,18 @@ fn try_add_wolff_neighbor<R: Rng + ?Sized>(
     if scratch.in_cluster[nidx] {
         return;
     }
-    let ri = (lattice.get(x, y, z) - phi).cos();
-    let rj = (lattice.get(xn, yn, zn) - phi).cos();
+
+    let idx = lattice.idx(x, y, z);
+    let (ri, rj) = match theta_scratch {
+        Some(theta_scratch) => (
+            theta_scratch.cos_theta[idx] * cos_phi + theta_scratch.sin_theta[idx] * sin_phi,
+            theta_scratch.cos_theta[nidx] * cos_phi + theta_scratch.sin_theta[nidx] * sin_phi,
+        ),
+        None => (
+            (lattice.theta[idx] - phi).cos(),
+            (lattice.theta[nidx] - phi).cos(),
+        ),
+    };
     if rng.gen::<f64>() < wolff_add_probability(beta, neighbor.coupling, ri, rj) {
         scratch.in_cluster[nidx] = true;
         scratch.stack.push((xn, yn, zn));
@@ -196,6 +211,7 @@ pub fn wolff_cluster_step_with_theta_scratch<R: Rng + ?Sized>(
     }
     let beta = 1.0 / params.temperature;
     let phi = TWO_PI * rng.gen::<f64>();
+    let (sin_phi, cos_phi) = phi.sin_cos();
     let x0 = rng.gen_range(0..lattice.l_x);
     let y0 = rng.gen_range(0..lattice.l_y);
     let z0 = rng.gen_range(0..lattice.l_z);
@@ -208,7 +224,18 @@ pub fn wolff_cluster_step_with_theta_scratch<R: Rng + ?Sized>(
 
     while let Some(site @ (x, y, z)) = scratch.stack.pop() {
         for neighbor in neighbors!(lattice, params, x, y, z) {
-            try_add_wolff_neighbor(lattice, scratch, beta, phi, site, neighbor, rng);
+            try_add_wolff_neighbor(
+                lattice,
+                scratch,
+                theta_scratch.as_deref(),
+                beta,
+                phi,
+                sin_phi,
+                cos_phi,
+                site,
+                neighbor,
+                rng,
+            );
         }
     }
 

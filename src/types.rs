@@ -100,13 +100,14 @@ impl ThetaScratch {
     pub fn refresh(&mut self, lattice: &ThetaLattice) -> Result<(), String> {
         self.validate(lattice)?;
         for (i, &theta) in lattice.theta.iter().enumerate() {
-            self.sin_theta[i] = theta.sin();
-            self.cos_theta[i] = theta.cos();
+            let (sin_theta, cos_theta) = theta.sin_cos();
+            self.sin_theta[i] = sin_theta;
+            self.cos_theta[i] = cos_theta;
         }
         Ok(())
     }
 
-    pub(crate) fn validate(&self, lattice: &ThetaLattice) -> Result<(), String> {
+    pub fn validate(&self, lattice: &ThetaLattice) -> Result<(), String> {
         if self.dims != (lattice.l_x, lattice.l_y, lattice.l_z)
             || self.sin_theta.len() != lattice.volume()
             || self.cos_theta.len() != lattice.volume()
@@ -118,8 +119,14 @@ impl ThetaScratch {
 
     #[inline]
     pub(crate) fn update_site(&mut self, idx: usize, theta: f64) {
-        self.sin_theta[idx] = theta.sin();
-        self.cos_theta[idx] = theta.cos();
+        let (sin_theta, cos_theta) = theta.sin_cos();
+        self.set_site_trig(idx, sin_theta, cos_theta);
+    }
+
+    #[inline]
+    pub(crate) fn set_site_trig(&mut self, idx: usize, sin_theta: f64, cos_theta: f64) {
+        self.sin_theta[idx] = sin_theta;
+        self.cos_theta[idx] = cos_theta;
     }
 }
 
