@@ -1,0 +1,31 @@
+name = "theta_jxy_two_point_mpi"
+output_dir = "runs/theta_jxy_two_point_mpi"
+checkpoint = true
+run_time = "12:00:00"
+checkpoint_time = "00:30:00"
+
+[model]
+# Cubic lattices from 4*4*4 through 20*20*20.
+L = [4, 6, 8, 10, 12, 14, 16, 18, 20]
+T = [2.8, 2.9, 3.0, 3.1, 3.2, 3.3]
+samples = 16
+base_seed = 20260627
+
+# Layer couplings: Jx(z) = Jy(z) = Jxy(z), Jz = 1/10.
+# Two-point disorder samples each layer from mean +/- delta.
+j_xy = 1.0
+delta_j_xy = [0.0, 0.5]
+j_z = 0.1
+delta_j_z = [0.0]
+
+[run]
+sweeps = 20000
+thermalization = 5000
+binsize = 50
+proposal_width = 3.141592653589793
+wolff_steps = 1
+
+[measure]
+# Omit these or keep at 0 to disable correlation output.
+corr_rmax_xy = 0
+corr_rmax_z = 0

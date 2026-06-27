@@ -1,0 +1,31 @@
+name = "theta_jxy12_prod_large"
+output_dir = "runs/theta_jxy12_prod_large"
+checkpoint = true
+run_time = "120:00:00"
+checkpoint_time = "00:30:00"
+
+[model]
+# Production split: large cubic lattices.
+L = [18, 20]
+# Critical-region temperature window around the expected Tc ~ 2.2.
+T = [2.10, 2.125, 2.15, 2.175, 2.20, 2.225, 2.25, 2.275, 2.30]
+samples = 20
+base_seed = 20260627
+
+# Two-point layer disorder: each layer has Jx(z) = Jy(z) = Jxy(z) in {1, 2}.
+# This is mean +/- delta = 1.5 +/- 0.5.
+j_xy = 1.5
+delta_j_xy = [0.5]
+j_z = 0.1
+delta_j_z = [0.0]
+
+[run]
+sweeps = 1000000
+thermalization = 100000
+binsize = 1000
+proposal_width = 3.141592653589793
+wolff_steps = 1
+
+[measure]
+corr_rmax_xy = 0
+corr_rmax_z = 0
