@@ -26,6 +26,7 @@ fn checkpoint_runtime_for_task(
         path: theta_task_checkpoint_path(checkpoint_dir, task_index),
         interval: checkpoint_time,
         resume: options.restart,
+        heartbeat_path: None,
     })
 }
 
@@ -218,6 +219,33 @@ fn theta_checkpoint_state_from_result(task_result: &ThetaTaskResult) -> ThetaChe
     }
 }
 
+pub(crate) fn write_scheduler_heartbeat(
+    path: impl AsRef<Path>,
+    task_index: usize,
+    thermalization_sweeps: usize,
+    measurement_sweeps: usize,
+) -> Result<(), String> {
+    let path = path.as_ref();
+    let tmp_path = path.with_extension(format!("heartbeat.tmp.{}", std::process::id()));
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+    }
+    {
+        let mut heartbeat = File::create(&tmp_path).map_err(|err| err.to_string())?;
+        writeln!(heartbeat, "task_index={task_index}").map_err(|err| err.to_string())?;
+        writeln!(heartbeat, "pid={}", std::process::id()).map_err(|err| err.to_string())?;
+        writeln!(heartbeat, "updated_at_unix={}", current_unix_seconds())
+            .map_err(|err| err.to_string())?;
+        writeln!(heartbeat, "thermalization_sweeps={thermalization_sweeps}")
+            .map_err(|err| err.to_string())?;
+        writeln!(heartbeat, "measurement_sweeps={measurement_sweeps}")
+            .map_err(|err| err.to_string())?;
+        heartbeat.sync_all().map_err(|err| err.to_string())?;
+    }
+    fs::rename(&tmp_path, path).map_err(|err| err.to_string())?;
+    Ok(())
+}
+
 fn maybe_write_theta_checkpoint(
     checkpoint: Option<&ThetaCheckpointRuntime>,
     last_checkpoint: &mut Instant,
@@ -250,6 +278,14 @@ fn maybe_write_theta_checkpoint(
         measurement_samples: series.samples(),
     };
     write_theta_checkpoint_state_to_path(&state, &checkpoint.path)?;
+    if let Some(heartbeat_path) = &checkpoint.heartbeat_path {
+        write_scheduler_heartbeat(
+            heartbeat_path,
+            task_index,
+            thermalization_sweeps,
+            measurement_sweeps,
+        )?;
+    }
     *last_checkpoint = Instant::now();
     Ok(())
 }

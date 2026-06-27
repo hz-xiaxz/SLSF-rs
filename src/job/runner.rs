@@ -18,6 +18,14 @@ fn claim_age(path: &Path) -> Option<Duration> {
         .and_then(|modified| SystemTime::now().duration_since(modified).ok())
 }
 
+fn heartbeat_path_for_task(scheduler_dir: &Path, task_index: usize) -> PathBuf {
+    task_marker_path(scheduler_dir, task_index, "heartbeat")
+}
+
+fn task_liveness_age(scheduler_dir: &Path, task_index: usize, claim_path: &Path) -> Option<Duration> {
+    claim_age(&heartbeat_path_for_task(scheduler_dir, task_index)).or_else(|| claim_age(claim_path))
+}
+
 pub(crate) fn remove_stale_claim_if_needed(
     scheduler_dir: &Path,
     task_index: usize,
@@ -27,7 +35,7 @@ pub(crate) fn remove_stale_claim_if_needed(
     if task_marker_path(scheduler_dir, task_index, "done").exists() {
         return Ok(());
     }
-    let Some(age) = claim_age(claim_path) else {
+    let Some(age) = task_liveness_age(scheduler_dir, task_index, claim_path) else {
         return Ok(());
     };
     if age < stale_after {
@@ -99,6 +107,7 @@ fn mark_task_done(scheduler_dir: &Path, task_index: usize, claim_path: &Path) ->
         done.sync_all().map_err(|err| err.to_string())?;
     }
     fs::rename(&tmp_done_path, &done_path).map_err(|err| err.to_string())?;
+    remove_path_if_exists(&heartbeat_path_for_task(scheduler_dir, task_index))?;
     match fs::remove_file(claim_path) {
         Ok(()) => Ok(()),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -285,12 +294,30 @@ fn theta_job_status(cfg: &ThetaJobConfig, options: &ThetaRunOptions) -> Result<S
         .scheduler_dir
         .clone()
         .unwrap_or_else(|| measurement_dir.join("scheduler"));
-    let completed_markers = job
-        .tasks
-        .iter()
-        .enumerate()
-        .filter(|(idx, _)| task_marker_path(&scheduler_dir, *idx, "done").exists())
-        .count();
+    let mut completed_markers = 0usize;
+    let mut claimed = 0usize;
+    let mut stale = 0usize;
+    let mut heartbeat = 0usize;
+    for task_index in 0..job.tasks.len() {
+        if task_marker_path(&scheduler_dir, task_index, "done").exists() {
+            completed_markers += 1;
+            continue;
+        }
+        let claim_path = task_marker_path(&scheduler_dir, task_index, "claim");
+        if claim_path.exists() {
+            claimed += 1;
+            let heartbeat_path = heartbeat_path_for_task(&scheduler_dir, task_index);
+            if heartbeat_path.exists() {
+                heartbeat += 1;
+            }
+            if task_liveness_age(&scheduler_dir, task_index, &claim_path)
+                .map(|age| age >= CLAIM_STALE_AFTER)
+                .unwrap_or(false)
+            {
+                stale += 1;
+            }
+        }
+    }
     let completed_rank_tasks = (0..options.world_size())
         .filter_map(|rank| {
             read_theta_job_result(rank_result_path_with_options(&job.name, rank, options)).ok()
@@ -301,10 +328,15 @@ fn theta_job_status(cfg: &ThetaJobConfig, options: &ThetaRunOptions) -> Result<S
     let rank_files = (0..options.world_size())
         .filter(|&rank| rank_result_path_with_options(&job.name, rank, options).exists())
         .count();
+    let pending = job.tasks.len().saturating_sub(completed + claimed);
     Ok(format!(
-        "{} of {} theta task(s) marked done; {} of {} rank result file(s) present",
+        "{} of {} theta task(s) marked done; {} claimed/running ({} with heartbeat, {} stale); {} pending; {} of {} rank result file(s) present",
         completed,
         job.tasks.len(),
+        claimed,
+        heartbeat,
+        stale,
+        pending,
         rank_files,
         options.world_size()
     ))
@@ -368,8 +400,11 @@ pub fn run_theta_job_dynamic_with_options(
         let Some(claim_path) = try_claim_task(&scheduler_dir, task_index, rank, world_size)? else {
             continue;
         };
-        let checkpoint =
+        let mut checkpoint =
             checkpoint_runtime_for_task(&job.name, &options, cfg.checkpoint_time, task_index);
+        if let Some(checkpoint) = checkpoint.as_mut() {
+            checkpoint.heartbeat_path = Some(heartbeat_path_for_task(&scheduler_dir, task_index));
+        }
         let task_result = run_theta_task_with_checkpoint(task, task_index, checkpoint.as_ref())?;
         mark_task_done(&scheduler_dir, task_index, &claim_path)?;
         tasks.push(task_result);

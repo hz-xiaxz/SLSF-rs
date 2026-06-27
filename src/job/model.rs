@@ -387,10 +387,11 @@ pub struct ThetaRunOptions {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-struct ThetaCheckpointRuntime {
-    path: PathBuf,
-    interval: Duration,
-    resume: bool,
+pub(crate) struct ThetaCheckpointRuntime {
+    pub(crate) path: PathBuf,
+    pub(crate) interval: Duration,
+    pub(crate) resume: bool,
+    pub(crate) heartbeat_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
