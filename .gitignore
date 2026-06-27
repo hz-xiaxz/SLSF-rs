@@ -1,0 +1,34 @@
+*.jl.*.cov
+*.jl.cov
+*.jl.mem
+*.rej
+.DS_Store
+.benchmarkci
+Manifest.toml
+benchmark/*.json
+coverage
+docs/build/
+env
+target/
+node_modules
+.worktrees/
+
+# Local run outputs and artifacts
+logs/
+results/
+*.out
+*.log
+*.h5
+
+# Local HDF5 source/build artifacts
+hdf5/
+hdf5-*/
+hdf5*.tar.gz
+
+.env
+*.env
+.zuliprc
+.cryo/chambers/*/.cryo/
+.cryo/chambers/*/email-artifacts/
+.cryo/chambers/*/zulip-artifacts/
+.cryo/chambers/*/last-monitor-output.txt
