@@ -371,8 +371,14 @@ pub fn run_theta_job_with_options(
     let tasks = job
         .selected_tasks(assignment)
         .map(|(task_index, task)| {
-            let checkpoint =
-                checkpoint_runtime_for_task(&job.name, &options, cfg.checkpoint_time, task_index);
+            let checkpoint = checkpoint_runtime_for_task(
+                &job.name,
+                &options,
+                cfg.run_time,
+                cfg.checkpoint_time,
+                started,
+                task_index,
+            );
             run_theta_task_with_checkpoint(task, task_index, checkpoint.as_ref())
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -408,8 +414,14 @@ pub fn run_theta_job_dynamic_with_options(
         let Some(claim_path) = try_claim_task(&scheduler_dir, task_index, rank, world_size)? else {
             continue;
         };
-        let mut checkpoint =
-            checkpoint_runtime_for_task(&job.name, &options, cfg.checkpoint_time, task_index);
+        let mut checkpoint = checkpoint_runtime_for_task(
+            &job.name,
+            &options,
+            cfg.run_time,
+            cfg.checkpoint_time,
+            started,
+            task_index,
+        );
         if let Some(checkpoint) = checkpoint.as_mut() {
             checkpoint.heartbeat_path = Some(heartbeat_path_for_task(&scheduler_dir, task_index));
         }

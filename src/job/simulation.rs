@@ -89,6 +89,13 @@ pub fn run_theta_task(task: &ThetaTask) -> Result<ThetaTaskResult, String> {
     run_theta_task_with_checkpoint(task, 0, None)
 }
 
+fn checkpoint_deadline_reached(checkpoint: Option<&ThetaCheckpointRuntime>) -> bool {
+    checkpoint
+        .and_then(|checkpoint| checkpoint.deadline)
+        .map(|deadline| Instant::now() >= deadline)
+        .unwrap_or(false)
+}
+
 pub(crate) fn run_theta_task_with_checkpoint(
     task: &ThetaTask,
     task_index: usize,
@@ -166,7 +173,13 @@ pub(crate) fn run_theta_task_with_checkpoint(
     let mut wolff_scratch = WolffScratch::new(&lattice);
     let mut last_checkpoint = Instant::now();
 
+    let mut completed_thermalization_sweeps = thermalization_start;
+    let mut completed_measurement_sweeps = measurement_start;
+
     for thermalization_sweeps in thermalization_start..task.thermalization {
+        if checkpoint_deadline_reached(checkpoint) {
+            break;
+        }
         acceptance_sum += metropolis_sweep_with_scratch(
             &mut lattice,
             &params,
@@ -184,6 +197,7 @@ pub(crate) fn run_theta_task_with_checkpoint(
                 &mut rng,
             )?;
         }
+        completed_thermalization_sweeps = thermalization_sweeps + 1;
         maybe_write_theta_checkpoint(
             checkpoint,
             &mut last_checkpoint,
@@ -191,7 +205,7 @@ pub(crate) fn run_theta_task_with_checkpoint(
             task_index,
             &lattice,
             &rng,
-            thermalization_sweeps + 1,
+            completed_thermalization_sweeps,
             measurement_start,
             acceptance_sum,
             acceptance_count,
@@ -205,6 +219,9 @@ pub(crate) fn run_theta_task_with_checkpoint(
     let corr_rmax_z = task.correlation_rmax_z.min(task.l_z / 2);
 
     for measurement_sweeps in measurement_start..task.sweeps {
+        if checkpoint_deadline_reached(checkpoint) {
+            break;
+        }
         let sweep_started = Instant::now();
         acceptance_sum += metropolis_sweep_with_scratch(
             &mut lattice,
@@ -253,6 +270,7 @@ pub(crate) fn run_theta_task_with_checkpoint(
         let measure_seconds = measure_started.elapsed().as_secs_f64();
         series.push("_ll_sweep_time", sweep_seconds);
         series.push("_ll_measure_time", measure_seconds);
+        completed_measurement_sweeps = measurement_sweeps + 1;
         maybe_write_theta_checkpoint(
             checkpoint,
             &mut last_checkpoint,
@@ -260,8 +278,8 @@ pub(crate) fn run_theta_task_with_checkpoint(
             task_index,
             &lattice,
             &rng,
-            task.thermalization,
-            measurement_sweeps + 1,
+            completed_thermalization_sweeps,
+            completed_measurement_sweeps,
             acceptance_sum,
             acceptance_count,
             &series,
@@ -275,8 +293,8 @@ pub(crate) fn run_theta_task_with_checkpoint(
             theta: lattice.theta.clone(),
             j_z: lattice.j_z.clone(),
             rng_word_pos: rng.position(),
-            thermalization_sweeps: task.thermalization,
-            measurement_sweeps: task.sweeps,
+            thermalization_sweeps: completed_thermalization_sweeps,
+            measurement_sweeps: completed_measurement_sweeps,
             acceptance_sum,
             acceptance_count,
             measurement_accumulators: series.compact(),
@@ -290,7 +308,7 @@ pub(crate) fn run_theta_task_with_checkpoint(
         task_index,
         observables,
         acceptance: acceptance_sum / acceptance_count.max(1) as f64,
-        measurements: task.sweeps,
+        measurements: completed_measurement_sweeps,
         measurement_bins,
         measurement_samples: BTreeMap::new(),
         final_theta: lattice.theta.clone(),

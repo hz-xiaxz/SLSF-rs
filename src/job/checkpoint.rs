@@ -15,18 +15,25 @@ fn checkpoint_dir_for_job(job_name: &str, options: &ThetaRunOptions) -> PathBuf 
 fn checkpoint_runtime_for_task(
     job_name: &str,
     options: &ThetaRunOptions,
+    run_time: Duration,
     checkpoint_time: Duration,
+    run_started: Instant,
     task_index: usize,
 ) -> Option<ThetaCheckpointRuntime> {
     if !(options.checkpoint || options.restart || checkpoint_enabled()) {
         return None;
     }
     let checkpoint_dir = checkpoint_dir_for_job(job_name, options);
+    let deadline = run_time
+        .checked_sub(checkpoint_time)
+        .filter(|remaining| !remaining.is_zero())
+        .map(|remaining| run_started + remaining);
     Some(ThetaCheckpointRuntime {
         path: theta_task_checkpoint_path(checkpoint_dir, task_index),
         interval: checkpoint_time,
         resume: options.restart,
         heartbeat_path: None,
+        deadline,
     })
 }
 
@@ -49,11 +56,16 @@ fn finish_theta_job_run(
         Vec::new()
     };
     let output_path = write_theta_job_result_to_path(result, output_path)?;
+    let stopped_early = result.tasks.iter().any(|task_result| {
+        task_result.thermalization_sweeps < task_result.task.thermalization
+            || task_result.measurement_sweeps < task_result.task.sweeps
+    });
     Ok(JobRunSummary {
         output_path,
         task_count,
         elapsed_seconds: started.elapsed().as_secs_f64(),
         checkpoint_paths,
+        stopped_early,
     })
 }
 

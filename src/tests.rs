@@ -625,6 +625,7 @@ fn theta_checkpoint_writes_scheduler_heartbeat() {
         interval: Duration::ZERO,
         resume: false,
         heartbeat_path: Some(heartbeat_path.clone()),
+        deadline: None,
     };
 
     let result = run_theta_task_with_checkpoint(&task, 0, Some(&checkpoint)).unwrap();

@@ -361,6 +361,7 @@ pub struct JobRunSummary {
     pub task_count: usize,
     pub elapsed_seconds: f64,
     pub checkpoint_paths: Vec<PathBuf>,
+    pub stopped_early: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -479,6 +480,7 @@ pub(crate) struct ThetaCheckpointRuntime {
     pub(crate) interval: Duration,
     pub(crate) resume: bool,
     pub(crate) heartbeat_path: Option<PathBuf>,
+    pub(crate) deadline: Option<Instant>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
