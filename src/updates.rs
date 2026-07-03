@@ -54,22 +54,65 @@ macro_rules! neighbors {
 #[inline]
 fn local_field(
     lattice: &ThetaLattice,
-    _params: &Parameters,
     scratch: &ThetaScratch,
+    idx: usize,
     x: usize,
     y: usize,
     z: usize,
 ) -> (f64, f64) {
-    neighbors!(lattice, _params, x, y, z)
-        .into_iter()
-        .fold((0.0, 0.0), |(hx, hy), neighbor| {
-            let (nx, ny, nz) = neighbor.site;
-            let idx = lattice.idx(nx, ny, nz);
-            (
-                hx + neighbor.coupling * scratch.cos_theta[idx],
-                hy + neighbor.coupling * scratch.sin_theta[idx],
-            )
-        })
+    let plane = lattice.l_x * lattice.l_y;
+    let x_p_idx = if x + 1 == lattice.l_x {
+        idx + 1 - lattice.l_x
+    } else {
+        idx + 1
+    };
+    let x_m_idx = if x == 0 {
+        idx + lattice.l_x - 1
+    } else {
+        idx - 1
+    };
+    let y_p_idx = if y + 1 == lattice.l_y {
+        idx + lattice.l_x - plane
+    } else {
+        idx + lattice.l_x
+    };
+    let y_m_idx = if y == 0 {
+        idx + plane - lattice.l_x
+    } else {
+        idx - lattice.l_x
+    };
+    let z_p_idx = if z + 1 == lattice.l_z {
+        idx + plane - lattice.volume()
+    } else {
+        idx + plane
+    };
+    let z_m = if z == 0 { lattice.l_z - 1 } else { z - 1 };
+    let z_m_idx = if z == 0 {
+        idx + lattice.volume() - plane
+    } else {
+        idx - plane
+    };
+
+    let j_xy = lattice.j_xy[z];
+    let j_z_p = lattice.j_z[z];
+    let j_z_m = lattice.j_z[z_m];
+
+    let hx = j_xy
+        * (scratch.cos_theta[x_p_idx]
+            + scratch.cos_theta[x_m_idx]
+            + scratch.cos_theta[y_p_idx]
+            + scratch.cos_theta[y_m_idx])
+        + j_z_p * scratch.cos_theta[z_p_idx]
+        + j_z_m * scratch.cos_theta[z_m_idx];
+    let hy = j_xy
+        * (scratch.sin_theta[x_p_idx]
+            + scratch.sin_theta[x_m_idx]
+            + scratch.sin_theta[y_p_idx]
+            + scratch.sin_theta[y_m_idx])
+        + j_z_p * scratch.sin_theta[z_p_idx]
+        + j_z_m * scratch.sin_theta[z_m_idx];
+
+    (hx, hy)
 }
 
 #[inline]
@@ -82,16 +125,20 @@ pub(crate) fn local_metropolis_step_unchecked<R: Rng + ?Sized>(
     params: &Parameters,
     scratch: &mut ThetaScratch,
     width: f64,
+    volume: usize,
     rng: &mut R,
 ) -> bool {
-    let x = rng.random_range(0..lattice.l_x);
-    let y = rng.random_range(0..lattice.l_y);
-    let z = rng.random_range(0..lattice.l_z);
-    let idx = lattice.idx(x, y, z);
+    let idx = rng.random_range(0..volume);
+    let plane = lattice.l_x * lattice.l_y;
+    let z = idx / plane;
+    let xy = idx - z * plane;
+    let y = xy / lattice.l_x;
+    let x = xy - y * lattice.l_x;
+
     let theta_old = lattice.theta[idx];
     let theta_new = crate::types::wrap_angle(theta_old + width * (2.0 * rng.random::<f64>() - 1.0));
     let (new_sin, new_cos) = theta_new.sin_cos();
-    let (hx, hy) = local_field(lattice, params, scratch, x, y, z);
+    let (hx, hy) = local_field(lattice, scratch, idx, x, y, z);
     let old_energy =
         local_theta_energy_from_trig(scratch.sin_theta[idx], scratch.cos_theta[idx], hx, hy);
     let delta_energy = local_theta_energy_from_trig(new_sin, new_cos, hx, hy) - old_energy;
@@ -119,6 +166,7 @@ pub fn local_metropolis_step<R: Rng + ?Sized>(
         params,
         &mut scratch,
         width,
+        lattice.volume(),
         rng,
     ))
 }
@@ -136,7 +184,8 @@ pub fn metropolis_sweep_with_scratch<R: Rng + ?Sized>(
     let volume = lattice.volume();
     let mut accepted = 0usize;
     for _ in 0..volume {
-        accepted += local_metropolis_step_unchecked(lattice, params, scratch, width, rng) as usize;
+        accepted +=
+            local_metropolis_step_unchecked(lattice, params, scratch, width, volume, rng) as usize;
     }
     Ok(accepted as f64 / volume as f64)
 }
