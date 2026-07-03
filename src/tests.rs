@@ -120,8 +120,10 @@ fn theta_metropolis_updates_validate_and_keep_angles_wrapped() {
     assert!(local_metropolis_step(&mut lat, &params, 0.0, &mut rng).unwrap());
     assert_eq!(lat.theta, old_theta);
 
-    let acceptance = metropolis_sweep(&mut lat, &params, 0.5, &mut rng).unwrap();
-    assert!((0.0..=1.0).contains(&acceptance));
+    assert_err_eq(
+        metropolis_sweep(&mut lat, &params, 0.5, &mut rng),
+        "red-black Metropolis sweep requires even lattice dimensions",
+    );
     assert!(lat.theta.iter().all(|&v| (0.0..TWO_PI).contains(&v)));
     assert_err_eq(
         local_metropolis_step(&mut lat, &params, -0.1, &mut rng),
@@ -132,9 +134,16 @@ fn theta_metropolis_updates_validate_and_keep_angles_wrapped() {
         "proposal_width must be nonnegative and finite",
     );
 
-    let mut theta_scratch = ThetaScratch::new(&lat);
+    let mut even_lat = ThetaLattice::new(4, 4, 4).unwrap();
+    initialize_disorder(&mut even_lat, &params, &mut rng).unwrap();
+    initialize_angles(&mut even_lat, InitMode::Random, &mut rng).unwrap();
+    let acceptance = metropolis_sweep(&mut even_lat, &params, 0.5, &mut rng).unwrap();
+    assert!((0.0..=1.0).contains(&acceptance));
+    assert!(even_lat.theta.iter().all(|&v| (0.0..TWO_PI).contains(&v)));
+
+    let mut theta_scratch = ThetaScratch::new(&even_lat);
     let acceptance =
-        metropolis_sweep_with_scratch(&mut lat, &params, &mut theta_scratch, 0.5, &mut rng)
+        metropolis_sweep_with_scratch(&mut even_lat, &params, &mut theta_scratch, 0.5, &mut rng)
             .unwrap();
     assert!((0.0..=1.0).contains(&acceptance));
 }
@@ -188,7 +197,7 @@ fn theta_temperature_validation_and_helicity() {
 #[test]
 fn theta_simulation_driver() {
     let mut rng = FastRng::seed_from_u64(14);
-    let mut lat = ThetaLattice::new(3, 3, 3).unwrap();
+    let mut lat = ThetaLattice::new(4, 4, 4).unwrap();
     let params = Parameters::new(1.0, 1.0, 0.0, 0.5);
     let options = ThetaSimulationOptions {
         thermal_sweeps: 5,

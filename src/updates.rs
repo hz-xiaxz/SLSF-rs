@@ -120,21 +120,18 @@ fn local_theta_energy_from_trig(sin_theta: f64, cos_theta: f64, hx: f64, hy: f64
     -(cos_theta * hx + sin_theta * hy)
 }
 
-pub(crate) fn local_metropolis_step_unchecked<R: Rng + ?Sized>(
+#[inline]
+fn local_metropolis_step_at_unchecked<R: Rng + ?Sized>(
     lattice: &mut ThetaLattice,
     params: &Parameters,
     scratch: &mut ThetaScratch,
     width: f64,
-    volume: usize,
+    idx: usize,
+    x: usize,
+    y: usize,
+    z: usize,
     rng: &mut R,
 ) -> bool {
-    let idx = rng.random_range(0..volume);
-    let plane = lattice.l_x * lattice.l_y;
-    let z = idx / plane;
-    let xy = idx - z * plane;
-    let y = xy / lattice.l_x;
-    let x = xy - y * lattice.l_x;
-
     let theta_old = lattice.theta[idx];
     let theta_new = crate::types::wrap_angle(theta_old + width * (2.0 * rng.random::<f64>() - 1.0));
     let (new_sin, new_cos) = theta_new.sin_cos();
@@ -150,6 +147,23 @@ pub(crate) fn local_metropolis_step_unchecked<R: Rng + ?Sized>(
     } else {
         false
     }
+}
+
+pub(crate) fn local_metropolis_step_unchecked<R: Rng + ?Sized>(
+    lattice: &mut ThetaLattice,
+    params: &Parameters,
+    scratch: &mut ThetaScratch,
+    width: f64,
+    volume: usize,
+    rng: &mut R,
+) -> bool {
+    let idx = rng.random_range(0..volume);
+    let plane = lattice.l_x * lattice.l_y;
+    let z = idx / plane;
+    let xy = idx - z * plane;
+    let y = xy / lattice.l_x;
+    let x = xy - y * lattice.l_x;
+    local_metropolis_step_at_unchecked(lattice, params, scratch, width, idx, x, y, z, rng)
 }
 
 pub fn local_metropolis_step<R: Rng + ?Sized>(
@@ -171,6 +185,14 @@ pub fn local_metropolis_step<R: Rng + ?Sized>(
     ))
 }
 
+#[inline]
+fn validate_red_black_lattice(lattice: &ThetaLattice) -> Result<(), String> {
+    if lattice.l_x % 2 != 0 || lattice.l_y % 2 != 0 || lattice.l_z % 2 != 0 {
+        return Err("red-black Metropolis sweep requires even lattice dimensions".to_string());
+    }
+    Ok(())
+}
+
 pub fn metropolis_sweep_with_scratch<R: Rng + ?Sized>(
     lattice: &mut ThetaLattice,
     params: &Parameters,
@@ -181,13 +203,24 @@ pub fn metropolis_sweep_with_scratch<R: Rng + ?Sized>(
     validate_temperature(params)?;
     let width = validate_proposal_width(proposal_width)?;
     scratch.validate(lattice)?;
-    let volume = lattice.volume();
+    validate_red_black_lattice(lattice)?;
+
     let mut accepted = 0usize;
-    for _ in 0..volume {
-        accepted +=
-            local_metropolis_step_unchecked(lattice, params, scratch, width, volume, rng) as usize;
+    for parity in 0..2usize {
+        for z in 0..lattice.l_z {
+            for y in 0..lattice.l_y {
+                let x_start = (parity + y + z) & 1;
+                for x in (x_start..lattice.l_x).step_by(2) {
+                    let idx = lattice.idx(x, y, z);
+                    accepted += local_metropolis_step_at_unchecked(
+                        lattice, params, scratch, width, idx, x, y, z, rng,
+                    ) as usize;
+                }
+            }
+        }
     }
-    Ok(accepted as f64 / volume as f64)
+
+    Ok(accepted as f64 / lattice.volume() as f64)
 }
 
 pub fn metropolis_sweep<R: Rng + ?Sized>(
