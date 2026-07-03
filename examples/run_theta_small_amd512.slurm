@@ -14,11 +14,15 @@ source /public1/soft/modules/module.sh
 module load mpi
 
 CONFIG=${CONFIG:-examples/theta_jxy12_prod_small.toml}
-BINARY=${BINARY:-target/release/slsf}
+TARGET_DIR=${TARGET_DIR:-target/native-nightly}
+BINARY=${BINARY:-$TARGET_DIR/release/slsf}
 CARGO=${CARGO:-$HOME/.cargo/bin/cargo}
+RUSTFLAGS=${RUSTFLAGS:--C target-cpu=native}
 
 mkdir -p runs
 
-"$CARGO" build --release
+# Build on the allocated compute node so target-cpu=native matches the CPU
+# that will run the simulation, including AVX512 when available.
+RUSTFLAGS="$RUSTFLAGS" "$CARGO" +nightly build --release --target-dir "$TARGET_DIR"
 
 srun --wait=0 "$BINARY" mpi-run --config "$CONFIG" --restart

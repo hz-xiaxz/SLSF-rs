@@ -1,3 +1,6 @@
+#![feature(portable_simd)]
+
+pub(crate) mod fast_math;
 pub mod initialization;
 pub mod job;
 pub mod observables;

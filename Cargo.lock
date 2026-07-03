@@ -161,6 +161,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "doubled"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1dd32c7cc01b2799bf6ddb980f595b6235fb5ebdb7926b4010202663e9448ffd"
+
+[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -196,9 +202,9 @@ checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 
 [[package]]
 name = "hdf5-pure"
-version = "0.20.0"
+version = "0.21.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6f3407818fd0cf883f3b40ebccde6d21c7704c8de3c669fb2def67c6296d2526"
+checksum = "20fde04379b9932a190ff9c402d904b378dce9797ab567df09d9724f1afe3b74"
 dependencies = [
  "byteorder",
  "flate2",
@@ -369,6 +375,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "703d5c7ef118737c72f1af64ad2f6f8c5e1921f818cdcb97b8fe6fc69bf66214"
 
 [[package]]
+name = "sleef"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ea6dbf8ab191d2d292f99457cf06f1465b7764a856a5cfee3ab8ada09d7e03cf"
+dependencies = [
+ "doubled",
+]
+
+[[package]]
 name = "slsf"
 version = "0.1.0"
 dependencies = [
@@ -378,6 +393,7 @@ dependencies = [
  "rand",
  "serde",
  "serde_json",
+ "sleef",
  "toml",
 ]
 

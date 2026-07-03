@@ -134,13 +134,13 @@ fn local_metropolis_step_at_unchecked<R: Rng + ?Sized>(
 ) -> bool {
     let theta_old = lattice.theta[idx];
     let theta_new = crate::types::wrap_angle(theta_old + width * (2.0 * rng.random::<f64>() - 1.0));
-    let (new_sin, new_cos) = theta_new.sin_cos();
+    let (new_sin, new_cos) = crate::fast_math::sin_cos(theta_new);
     let (hx, hy) = local_field(lattice, scratch, idx, x, y, z);
     let old_energy =
         local_theta_energy_from_trig(scratch.sin_theta[idx], scratch.cos_theta[idx], hx, hy);
     let delta_energy = local_theta_energy_from_trig(new_sin, new_cos, hx, hy) - old_energy;
 
-    if delta_energy <= 0.0 || rng.random::<f64>() < (-delta_energy / params.temperature).exp() {
+    if delta_energy <= 0.0 || rng.random::<f64>() < crate::fast_math::exp(-delta_energy / params.temperature) {
         lattice.theta[idx] = theta_new;
         scratch.set_site_trig(idx, new_sin, new_cos);
         true
@@ -164,6 +164,130 @@ pub(crate) fn local_metropolis_step_unchecked<R: Rng + ?Sized>(
     let y = xy / lattice.l_x;
     let x = xy - y * lattice.l_x;
     local_metropolis_step_at_unchecked(lattice, params, scratch, width, idx, x, y, z, rng)
+}
+
+#[inline]
+fn local_metropolis_step_x_batch<const LANES: usize, R: Rng + ?Sized>(
+    lattice: &mut ThetaLattice,
+    params: &Parameters,
+    scratch: &mut ThetaScratch,
+    width: f64,
+    x0: usize,
+    y: usize,
+    z: usize,
+    rng: &mut R,
+    sin_cos_batch: fn([f64; LANES]) -> ([f64; LANES], [f64; LANES]),
+    exp_batch: fn([f64; LANES]) -> [f64; LANES],
+) -> usize {
+    let mut idxs = [0usize; LANES];
+    let mut theta_new = [0.0; LANES];
+    let mut hx = [0.0; LANES];
+    let mut hy = [0.0; LANES];
+    let mut old_energy = [0.0; LANES];
+
+    for lane in 0..LANES {
+        let x = x0 + 2 * lane;
+        let idx = lattice.idx(x, y, z);
+        idxs[lane] = idx;
+        theta_new[lane] = crate::types::wrap_angle(
+            lattice.theta[idx] + width * (2.0 * rng.random::<f64>() - 1.0),
+        );
+        let (site_hx, site_hy) = local_field(lattice, scratch, idx, x, y, z);
+        hx[lane] = site_hx;
+        hy[lane] = site_hy;
+        old_energy[lane] = local_theta_energy_from_trig(
+            scratch.sin_theta[idx],
+            scratch.cos_theta[idx],
+            site_hx,
+            site_hy,
+        );
+    }
+
+    let (new_sin, new_cos) = sin_cos_batch(theta_new);
+    let mut delta_energy = [0.0; LANES];
+    let mut exp_arg = [0.0; LANES];
+    let mut uphill_lane = [usize::MAX; LANES];
+    let mut uphill_count = 0usize;
+    for lane in 0..LANES {
+        delta_energy[lane] =
+            local_theta_energy_from_trig(new_sin[lane], new_cos[lane], hx[lane], hy[lane])
+                - old_energy[lane];
+        if delta_energy[lane] > 0.0 {
+            exp_arg[uphill_count] = -delta_energy[lane] / params.temperature;
+            uphill_lane[uphill_count] = lane;
+            uphill_count += 1;
+        }
+    }
+
+    let mut accept_prob = [1.0; LANES];
+    if uphill_count == LANES {
+        accept_prob = exp_batch(exp_arg);
+    } else {
+        for uphill_idx in 0..uphill_count {
+            let lane = uphill_lane[uphill_idx];
+            accept_prob[lane] = crate::fast_math::exp(exp_arg[uphill_idx]);
+        }
+    }
+
+    let mut accepted = 0usize;
+    for lane in 0..LANES {
+        if delta_energy[lane] <= 0.0 || rng.random::<f64>() < accept_prob[lane] {
+            lattice.theta[idxs[lane]] = theta_new[lane];
+            scratch.set_site_trig(idxs[lane], new_sin[lane], new_cos[lane]);
+            accepted += 1;
+        }
+    }
+    accepted
+}
+
+#[inline]
+fn local_metropolis_step_x_batch4_unchecked<R: Rng + ?Sized>(
+    lattice: &mut ThetaLattice,
+    params: &Parameters,
+    scratch: &mut ThetaScratch,
+    width: f64,
+    x0: usize,
+    y: usize,
+    z: usize,
+    rng: &mut R,
+) -> usize {
+    local_metropolis_step_x_batch(
+        lattice,
+        params,
+        scratch,
+        width,
+        x0,
+        y,
+        z,
+        rng,
+        crate::fast_math::sin_cos_x4,
+        crate::fast_math::exp_x4,
+    )
+}
+
+#[inline]
+fn local_metropolis_step_x_batch8_unchecked<R: Rng + ?Sized>(
+    lattice: &mut ThetaLattice,
+    params: &Parameters,
+    scratch: &mut ThetaScratch,
+    width: f64,
+    x0: usize,
+    y: usize,
+    z: usize,
+    rng: &mut R,
+) -> usize {
+    local_metropolis_step_x_batch(
+        lattice,
+        params,
+        scratch,
+        width,
+        x0,
+        y,
+        z,
+        rng,
+        crate::fast_math::sin_cos_x8,
+        crate::fast_math::exp_x8,
+    )
 }
 
 pub fn local_metropolis_step<R: Rng + ?Sized>(
@@ -206,15 +330,32 @@ pub fn metropolis_sweep_with_scratch<R: Rng + ?Sized>(
     validate_red_black_lattice(lattice)?;
 
     let mut accepted = 0usize;
+    let use_batch8 = crate::fast_math::has_avx512_f64_lanes();
     for parity in 0..2usize {
         for z in 0..lattice.l_z {
             for y in 0..lattice.l_y {
                 let x_start = (parity + y + z) & 1;
-                for x in (x_start..lattice.l_x).step_by(2) {
+                let mut x = x_start;
+                if use_batch8 {
+                    while x + 14 < lattice.l_x {
+                        accepted += local_metropolis_step_x_batch8_unchecked(
+                            lattice, params, scratch, width, x, y, z, rng,
+                        );
+                        x += 16;
+                    }
+                }
+                while x + 6 < lattice.l_x {
+                    accepted += local_metropolis_step_x_batch4_unchecked(
+                        lattice, params, scratch, width, x, y, z, rng,
+                    );
+                    x += 8;
+                }
+                while x < lattice.l_x {
                     let idx = lattice.idx(x, y, z);
                     accepted += local_metropolis_step_at_unchecked(
                         lattice, params, scratch, width, idx, x, y, z, rng,
                     ) as usize;
+                    x += 2;
                 }
             }
         }
@@ -235,7 +376,7 @@ pub fn metropolis_sweep<R: Rng + ?Sized>(
 
 #[inline]
 pub fn wolff_add_probability(beta: f64, coupling: f64, ri: f64, rj: f64) -> f64 {
-    1.0 - (-2.0 * beta * coupling * ri * rj).min(0.0).exp()
+    1.0 - crate::fast_math::exp((-2.0 * beta * coupling * ri * rj).min(0.0))
 }
 
 #[inline]
@@ -269,8 +410,8 @@ fn try_add_wolff_neighbor<R: Rng + ?Sized>(
             theta_scratch.cos_theta[nidx] * cos_phi + theta_scratch.sin_theta[nidx] * sin_phi,
         ),
         None => (
-            (lattice.theta[idx] - phi).cos(),
-            (lattice.theta[nidx] - phi).cos(),
+            crate::fast_math::cos(lattice.theta[idx] - phi),
+            crate::fast_math::cos(lattice.theta[nidx] - phi),
         ),
     };
     if rng.random::<f64>() < wolff_add_probability(beta, neighbor.coupling, ri, rj) {
@@ -293,7 +434,7 @@ pub fn wolff_cluster_step_with_theta_scratch<R: Rng + ?Sized>(
     }
     let beta = 1.0 / params.temperature;
     let phi = TWO_PI * rng.random::<f64>();
-    let (sin_phi, cos_phi) = phi.sin_cos();
+    let (sin_phi, cos_phi) = crate::fast_math::sin_cos(phi);
     let x0 = rng.random_range(0..lattice.l_x);
     let y0 = rng.random_range(0..lattice.l_y);
     let z0 = rng.random_range(0..lattice.l_z);

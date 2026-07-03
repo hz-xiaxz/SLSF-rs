@@ -183,7 +183,7 @@ impl ThetaScratch {
     pub fn refresh(&mut self, lattice: &ThetaLattice) -> Result<(), String> {
         self.validate(lattice)?;
         for (i, &theta) in lattice.theta.iter().enumerate() {
-            let (sin_theta, cos_theta) = theta.sin_cos();
+            let (sin_theta, cos_theta) = crate::fast_math::sin_cos(theta);
             self.sin_theta[i] = sin_theta;
             self.cos_theta[i] = cos_theta;
         }
@@ -202,7 +202,7 @@ impl ThetaScratch {
 
     #[inline]
     pub(crate) fn update_site(&mut self, idx: usize, theta: f64) {
-        let (sin_theta, cos_theta) = theta.sin_cos();
+        let (sin_theta, cos_theta) = crate::fast_math::sin_cos(theta);
         self.set_site_trig(idx, sin_theta, cos_theta);
     }
 

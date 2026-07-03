@@ -12,6 +12,7 @@ rand = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
+sleef = "0.3.3"
 
 [dev-dependencies]
 approx = "0.5"
