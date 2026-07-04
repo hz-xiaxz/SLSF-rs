@@ -1,3 +1,13 @@
+const HELICITY_COS_X: &str = "_helicity_cos_x";
+const HELICITY_COS_Y: &str = "_helicity_cos_y";
+const HELICITY_COS_Z: &str = "_helicity_cos_z";
+const HELICITY_SIN_X: &str = "_helicity_sin_x";
+const HELICITY_SIN_Y: &str = "_helicity_sin_y";
+const HELICITY_SIN_Z: &str = "_helicity_sin_z";
+const HELICITY_SIN2_X: &str = "_helicity_sin2_x";
+const HELICITY_SIN2_Y: &str = "_helicity_sin2_y";
+const HELICITY_SIN2_Z: &str = "_helicity_sin2_z";
+
 #[derive(Debug)]
 struct ObservableSeries {
     accumulators: BTreeMap<String, ScalarAccumulator>,
@@ -17,6 +27,18 @@ impl ObservableSeries {
             .entry(name.into())
             .or_insert_with(|| ScalarAccumulator::new(self.binsize))
             .push(value);
+    }
+
+    fn push_helicity(&mut self, obs: &ThetaObservables) {
+        self.push(HELICITY_COS_X, obs.cos_x);
+        self.push(HELICITY_COS_Y, obs.cos_y);
+        self.push(HELICITY_COS_Z, obs.cos_z);
+        self.push(HELICITY_SIN_X, obs.sin_x);
+        self.push(HELICITY_SIN_Y, obs.sin_y);
+        self.push(HELICITY_SIN_Z, obs.sin_z);
+        self.push(HELICITY_SIN2_X, obs.sin_x.powi(2));
+        self.push(HELICITY_SIN2_Y, obs.sin_y.powi(2));
+        self.push(HELICITY_SIN2_Z, obs.sin_z.powi(2));
     }
 
     fn from_compact(
@@ -42,6 +64,8 @@ impl ObservableSeries {
     fn estimates_and_measurement_bins(
         &self,
         binsize: usize,
+        volume: f64,
+        beta: f64,
     ) -> Result<
         (
             BTreeMap<String, ObservableEstimate>,
@@ -54,22 +78,131 @@ impl ObservableSeries {
             .iter()
             .map(|(name, acc)| Ok((name.clone(), acc.estimate(binsize)?)))
             .collect::<Result<BTreeMap<_, _>, String>>()?;
-        let measurement_bins = binned
+        let mut measurement_bins = binned
             .iter()
+            .filter(|(name, _)| !name.starts_with("_helicity_"))
             .map(|(name, estimate)| (name.clone(), estimate.internal_bins.clone()))
             .collect::<BTreeMap<_, _>>();
         let mut estimates = binned
             .iter()
+            .filter(|(name, _)| !name.starts_with("_helicity_"))
             .map(|(name, estimate)| (name.clone(), ObservableEstimate::new(estimate, binsize)))
             .collect::<BTreeMap<_, _>>();
-        if let (Some(rho_xy), Some(rho_z)) = (binned.get("RhoXY"), binned.get("RhoZ")) {
-            let diff = BinnedEstimate::jackknife_difference(rho_xy, rho_z)?;
+        if let Some(rho_xy) = helicity_estimate(
+            &binned,
+            [(HELICITY_COS_X, HELICITY_SIN_X, HELICITY_SIN2_X),
+             (HELICITY_COS_Y, HELICITY_SIN_Y, HELICITY_SIN2_Y)],
+            binsize,
+            volume,
+            beta,
+        )? {
+            measurement_bins.insert("RhoXY".to_string(), rho_xy.internal_bins.clone());
+            estimates.insert("RhoXY".to_string(), ObservableEstimate::new(&rho_xy, binsize));
+        }
+        if let Some(rho_z) = helicity_estimate(
+            &binned,
+            [(HELICITY_COS_Z, HELICITY_SIN_Z, HELICITY_SIN2_Z)],
+            binsize,
+            volume,
+            beta,
+        )? {
+            measurement_bins.insert("RhoZ".to_string(), rho_z.internal_bins.clone());
+            estimates.insert("RhoZ".to_string(), ObservableEstimate::new(&rho_z, binsize));
+        }
+        if let (Some(rho_xy), Some(rho_z)) = (
+            estimates.get("RhoXY").and_then(|_| measurement_bins.get("RhoXY")),
+            estimates.get("RhoZ").and_then(|_| measurement_bins.get("RhoZ")),
+        ) {
+            let rho_xy = BinnedEstimate::from_internal_bins(rho_xy.clone(), binsize)?;
+            let rho_z = BinnedEstimate::from_internal_bins(rho_z.clone(), binsize)?;
+            let diff = BinnedEstimate::jackknife_difference(&rho_xy, &rho_z)?;
+            measurement_bins.insert("RhoDifference".to_string(), diff.internal_bins.clone());
             estimates.insert(
                 "RhoDifference".to_string(),
                 ObservableEstimate::new(&diff, binsize),
             );
         }
         Ok((estimates, measurement_bins))
+    }
+}
+
+fn helicity_estimate<const N: usize>(
+    binned: &BTreeMap<String, BinnedEstimate>,
+    components: [(&str, &str, &str); N],
+    binsize: usize,
+    volume: f64,
+    beta: f64,
+) -> Result<Option<BinnedEstimate>, String> {
+    let mut component_bins = Vec::with_capacity(N);
+    for (cos_name, sin_name, sin2_name) in components {
+        let (Some(cos), Some(sin), Some(sin2)) = (
+            binned.get(cos_name),
+            binned.get(sin_name),
+            binned.get(sin2_name),
+        ) else {
+            return Ok(None);
+        };
+        let bin_count = cos
+            .internal_bins
+            .len()
+            .min(sin.internal_bins.len())
+            .min(sin2.internal_bins.len());
+        component_bins.push((cos, sin, sin2, bin_count));
+    }
+    let bin_count = component_bins
+        .iter()
+        .map(|(_, _, _, bin_count)| *bin_count)
+        .min()
+        .unwrap_or(0);
+    if bin_count == 0 {
+        return Ok(None);
+    }
+    let internal_bins = (0..bin_count)
+        .map(|bin_index| {
+            component_bins
+                .iter()
+                .map(|(cos, sin, sin2, _)| {
+                    cos.internal_bins[bin_index] / volume
+                        - beta
+                            * (sin2.internal_bins[bin_index] - sin.internal_bins[bin_index].powi(2))
+                            / volume
+                })
+                .sum::<f64>()
+                / N as f64
+        })
+        .collect::<Vec<_>>();
+    BinnedEstimate::from_internal_bins(internal_bins, binsize).map(Some)
+}
+
+#[cfg(test)]
+mod job_simulation_tests {
+    use super::*;
+
+    #[test]
+    fn helicity_modulus_uses_binned_current_variance() {
+        let mut series = ObservableSeries::new(2);
+        for sin in [1.0, 3.0] {
+            series.push_helicity(&ThetaObservables {
+                energy: 0.0,
+                magnetization: 0.0,
+                cos_x: 2.0,
+                cos_y: 2.0,
+                cos_z: 1.0,
+                sin_x: sin,
+                sin_y: sin,
+                sin_z: sin + 1.0,
+            });
+        }
+
+        let (observables, measurement_bins) = series
+            .estimates_and_measurement_bins(2, 2.0, 1.0)
+            .expect("helicity estimates");
+
+        assert!(!observables.contains_key(HELICITY_COS_X));
+        assert!((observables["RhoXY"].mean - 0.5).abs() < 1e-12);
+        assert!((observables["RhoZ"].mean - 0.0).abs() < 1e-12);
+        assert!((observables["RhoDifference"].mean - 0.5).abs() < 1e-12);
+        assert_eq!(measurement_bins["RhoXY"], vec![0.5]);
     }
 }
 
@@ -244,11 +377,7 @@ pub(crate) fn run_theta_task_with_checkpoint(
 
         let measure_started = Instant::now();
         let obs = measure_theta_observables_with_scratch(&lattice, &params, &theta_scratch);
-        let rho_x = obs.cos_x / volume - beta * obs.sin_x.powi(2) / volume;
-        let rho_y = obs.cos_y / volume - beta * obs.sin_y.powi(2) / volume;
-        let rho_z = obs.cos_z / volume - beta * obs.sin_z.powi(2) / volume;
-        series.push("RhoXY", (rho_x + rho_y) / 2.0);
-        series.push("RhoZ", rho_z);
+        series.push_helicity(&obs);
         series.push("Energy", obs.energy);
         series.push("Magnetization", obs.magnetization);
         if corr_rmax_xy > 0 || corr_rmax_z > 0 {
@@ -302,7 +431,8 @@ pub(crate) fn run_theta_task_with_checkpoint(
         write_theta_checkpoint_state_to_path(&state, &checkpoint.path)?;
     }
 
-    let (observables, measurement_bins) = series.estimates_and_measurement_bins(task.binsize)?;
+    let (observables, measurement_bins) =
+        series.estimates_and_measurement_bins(task.binsize, volume, beta)?;
     Ok(ThetaTaskResult {
         task: task.clone(),
         task_index,
