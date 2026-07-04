@@ -15,6 +15,20 @@ fn sorted_strings(mut values: Vec<String>) -> Vec<String> {
 }
 
 #[test]
+fn fast_math_x8_matches_scalar_regression() {
+    let input = [-2.0, -1.25, -0.5, -0.125, 0.0, 0.125, 0.5, 1.75];
+
+    let (simd_sin, simd_cos) = crate::fast_math::sin_cos_x8(input);
+    let simd_exp = crate::fast_math::exp_x8(input);
+
+    for (lane, &value) in input.iter().enumerate() {
+        assert_abs_diff_eq!(simd_sin[lane], value.sin(), epsilon = 1e-14);
+        assert_abs_diff_eq!(simd_cos[lane], value.cos(), epsilon = 1e-14);
+        assert_abs_diff_eq!(simd_exp[lane], value.exp(), epsilon = 1e-14);
+    }
+}
+
+#[test]
 fn theta_lattice_initialization_and_disorder() {
     assert!(ThetaLattice::new(0, 2, 2).is_err());
     assert!(ThetaLattice::new(2, 0, 2).is_err());

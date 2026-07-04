@@ -140,7 +140,9 @@ fn local_metropolis_step_at_unchecked<R: Rng + ?Sized>(
         local_theta_energy_from_trig(scratch.sin_theta[idx], scratch.cos_theta[idx], hx, hy);
     let delta_energy = local_theta_energy_from_trig(new_sin, new_cos, hx, hy) - old_energy;
 
-    if delta_energy <= 0.0 || rng.random::<f64>() < crate::fast_math::exp(-delta_energy / params.temperature) {
+    if delta_energy <= 0.0
+        || rng.random::<f64>() < crate::fast_math::exp(-delta_energy / params.temperature)
+    {
         lattice.theta[idx] = theta_new;
         scratch.set_site_trig(idx, new_sin, new_cos);
         true
