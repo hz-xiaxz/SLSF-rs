@@ -232,8 +232,8 @@ impl ScalarAccumulator {
         }
     }
 
-    pub fn estimate(&self, binsize: usize) -> Result<BinnedEstimate, String> {
-        BinnedEstimate::from_internal_bins(self.internal_bins.clone(), binsize)
+    pub fn estimate(&self) -> Result<BinnedEstimate, String> {
+        BinnedEstimate::from_internal_bins(self.internal_bins.clone(), self.internal_bin_length)
     }
 }
 
@@ -260,6 +260,8 @@ pub struct ThetaTask {
     pub correlation_rmax: usize,
     pub correlation_rmax_xy: usize,
     pub correlation_rmax_z: usize,
+    #[serde(default = "one_usize")]
+    pub correlation_interval: usize,
     pub j_xy_array: Option<Vec<f64>>,
     pub j_z_array: Option<Vec<f64>>,
 }
@@ -400,6 +402,7 @@ pub struct ThetaJobConfig {
     pub correlation_rmax: Option<usize>,
     pub correlation_rmax_xy: Option<usize>,
     pub correlation_rmax_z: Option<usize>,
+    pub correlation_interval: usize,
     pub run_time: Duration,
     pub checkpoint_time: Duration,
     pub job_name: String,
@@ -457,6 +460,12 @@ pub struct ThetaMeasureToml {
     pub corr_rmax: Option<usize>,
     pub corr_rmax_xy: Option<usize>,
     pub corr_rmax_z: Option<usize>,
+    pub corr_interval: Option<usize>,
+    pub correlation_interval: Option<usize>,
+}
+
+fn one_usize() -> usize {
+    1
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]

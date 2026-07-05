@@ -1,3 +1,5 @@
+use std::simd::{num::SimdFloat, Simd};
+
 use crate::types::{
     angle_diff, plus, validate_temperature, Parameters, ThetaCorrelations, ThetaLattice,
     ThetaObservables, ThetaScratch,
@@ -6,6 +8,38 @@ use crate::types::{
 #[inline]
 fn diff_cos_sin(cos_a: f64, sin_a: f64, cos_b: f64, sin_b: f64) -> (f64, f64) {
     (cos_a * cos_b + sin_a * sin_b, sin_a * cos_b - cos_a * sin_b)
+}
+
+#[inline]
+fn cached_correlation_dot_x8(
+    cos_theta: &[f64],
+    sin_theta: &[f64],
+    a_start: usize,
+    b_start: usize,
+    len: usize,
+) -> f64 {
+    const LANES: usize = 8;
+    let mut i = 0;
+    let mut sum = Simd::<f64, LANES>::splat(0.0);
+    while i + LANES <= len {
+        let a = a_start + i;
+        let b = b_start + i;
+        let cos_a = Simd::<f64, LANES>::from_slice(&cos_theta[a..a + LANES]);
+        let sin_a = Simd::<f64, LANES>::from_slice(&sin_theta[a..a + LANES]);
+        let cos_b = Simd::<f64, LANES>::from_slice(&cos_theta[b..b + LANES]);
+        let sin_b = Simd::<f64, LANES>::from_slice(&sin_theta[b..b + LANES]);
+        sum += cos_a * cos_b + sin_a * sin_b;
+        i += LANES;
+    }
+
+    let mut scalar_sum = sum.reduce_sum();
+    while i < len {
+        let a = a_start + i;
+        let b = b_start + i;
+        scalar_sum += cos_theta[a] * cos_theta[b] + sin_theta[a] * sin_theta[b];
+        i += 1;
+    }
+    scalar_sum
 }
 
 pub fn measure_theta_energy(lattice: &ThetaLattice, _params: &Parameters) -> f64 {
@@ -26,11 +60,16 @@ pub fn measure_theta_energy(lattice: &ThetaLattice, _params: &Parameters) -> f64
     energy / lattice.volume() as f64
 }
 
-pub fn measure_magnetization(lattice: &ThetaLattice) -> f64 {
+pub fn measure_magnetization_squared(lattice: &ThetaLattice) -> f64 {
     let (mx, my) = lattice.theta.iter().fold((0.0, 0.0), |(mx, my), &theta| {
         (mx + theta.cos(), my + theta.sin())
     });
-    (mx * mx + my * my).sqrt() / lattice.volume() as f64
+    let volume = lattice.volume() as f64;
+    (mx * mx + my * my) / (volume * volume)
+}
+
+pub fn measure_magnetization(lattice: &ThetaLattice) -> f64 {
+    measure_magnetization_squared(lattice).sqrt()
 }
 
 pub fn measure_theta_observables(lattice: &ThetaLattice, params: &Parameters) -> ThetaObservables {
@@ -104,7 +143,7 @@ pub fn measure_theta_observables_with_scratch(
     let volume = lattice.volume() as f64;
     ThetaObservables {
         energy: energy_sum / volume,
-        magnetization: (mx_sum * mx_sum + my_sum * my_sum).sqrt() / volume,
+        magnetization_squared: (mx_sum * mx_sum + my_sum * my_sum) / (volume * volume),
         cos_x,
         cos_y,
         cos_z,
@@ -120,6 +159,21 @@ pub fn measure_theta_correlations(
     rmax_xy: Option<usize>,
     rmax_z: Option<usize>,
 ) -> ThetaCorrelations {
+    let scratch = ThetaScratch::new(lattice);
+    measure_theta_correlations_with_scratch(lattice, &scratch, rmax, rmax_xy, rmax_z)
+}
+
+pub fn measure_theta_correlations_with_scratch(
+    lattice: &ThetaLattice,
+    scratch: &ThetaScratch,
+    rmax: Option<usize>,
+    rmax_xy: Option<usize>,
+    rmax_z: Option<usize>,
+) -> ThetaCorrelations {
+    scratch
+        .validate(lattice)
+        .expect("theta scratch dimensions must match lattice dimensions");
+
     let requested_xy =
         rmax_xy.unwrap_or_else(|| rmax.unwrap_or_else(|| (lattice.l_x / 2).min(lattice.l_y / 2)));
     let requested_z = rmax_z.unwrap_or_else(|| rmax.unwrap_or(lattice.l_z / 2));
@@ -134,12 +188,32 @@ pub fn measure_theta_correlations(
         let mut sx = 0.0;
         let mut sy = 0.0;
         for z in 0..lattice.l_z {
+            let z_base = lattice.l_x * lattice.l_y * z;
             for y in 0..lattice.l_y {
-                for x in 0..lattice.l_x {
-                    let theta = lattice.get(x, y, z);
-                    sx += angle_diff(theta, lattice.get((x + r) % lattice.l_x, y, z)).cos();
-                    sy += angle_diff(theta, lattice.get(x, (y + r) % lattice.l_y, z)).cos();
-                }
+                let row_start = z_base + lattice.l_x * y;
+                sx += cached_correlation_dot_x8(
+                    &scratch.cos_theta,
+                    &scratch.sin_theta,
+                    row_start,
+                    row_start + r,
+                    lattice.l_x - r,
+                );
+                sx += cached_correlation_dot_x8(
+                    &scratch.cos_theta,
+                    &scratch.sin_theta,
+                    row_start + lattice.l_x - r,
+                    row_start,
+                    r,
+                );
+
+                let y_shift = (y + r) % lattice.l_y;
+                sy += cached_correlation_dot_x8(
+                    &scratch.cos_theta,
+                    &scratch.sin_theta,
+                    row_start,
+                    z_base + lattice.l_x * y_shift,
+                    lattice.l_x,
+                );
             }
         }
         corr_x[r - 1] = sx / volume;
@@ -149,11 +223,16 @@ pub fn measure_theta_correlations(
     for r in 1..=rmax_z_eff {
         let mut sz = 0.0;
         for z in 0..lattice.l_z {
+            let z_base = lattice.l_x * lattice.l_y * z;
+            let z_shift_base = lattice.l_x * lattice.l_y * ((z + r) % lattice.l_z);
             for y in 0..lattice.l_y {
-                for x in 0..lattice.l_x {
-                    let theta = lattice.get(x, y, z);
-                    sz += angle_diff(theta, lattice.get(x, y, (z + r) % lattice.l_z)).cos();
-                }
+                sz += cached_correlation_dot_x8(
+                    &scratch.cos_theta,
+                    &scratch.sin_theta,
+                    z_base + lattice.l_x * y,
+                    z_shift_base + lattice.l_x * y,
+                    lattice.l_x,
+                );
             }
         }
         corr_z[r - 1] = sz / volume;

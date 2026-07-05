@@ -13,9 +13,13 @@ impl ObservableSeries {
     }
 
     fn push(&mut self, name: impl Into<String>, value: f64) {
+        self.push_with_binsize(name, value, self.binsize);
+    }
+
+    fn push_with_binsize(&mut self, name: impl Into<String>, value: f64, binsize: usize) {
         self.accumulators
             .entry(name.into())
-            .or_insert_with(|| ScalarAccumulator::new(self.binsize))
+            .or_insert_with(|| ScalarAccumulator::new(binsize.max(1)))
             .push(value);
     }
 
@@ -41,7 +45,7 @@ impl ObservableSeries {
 
     fn estimates_and_measurement_bins(
         &self,
-        binsize: usize,
+        _binsize: usize,
     ) -> Result<
         (
             BTreeMap<String, ObservableEstimate>,
@@ -52,7 +56,7 @@ impl ObservableSeries {
         let binned = self
             .accumulators
             .iter()
-            .map(|(name, acc)| Ok((name.clone(), acc.estimate(binsize)?)))
+            .map(|(name, acc)| Ok((name.clone(), acc.estimate()?)))
             .collect::<Result<BTreeMap<_, _>, String>>()?;
         let measurement_bins = binned
             .iter()
@@ -60,13 +64,18 @@ impl ObservableSeries {
             .collect::<BTreeMap<_, _>>();
         let mut estimates = binned
             .iter()
-            .map(|(name, estimate)| (name.clone(), ObservableEstimate::new(estimate, binsize)))
+            .map(|(name, estimate)| {
+                (
+                    name.clone(),
+                    ObservableEstimate::new(estimate, estimate.internal_bin_length),
+                )
+            })
             .collect::<BTreeMap<_, _>>();
         if let (Some(rho_xy), Some(rho_z)) = (binned.get("RhoXY"), binned.get("RhoZ")) {
             let diff = BinnedEstimate::jackknife_difference(rho_xy, rho_z)?;
             estimates.insert(
                 "RhoDifference".to_string(),
-                ObservableEstimate::new(&diff, binsize),
+                ObservableEstimate::new(&diff, diff.internal_bin_length),
             );
         }
         Ok((estimates, measurement_bins))
@@ -217,6 +226,7 @@ pub(crate) fn run_theta_task_with_checkpoint(
     let beta = 1.0 / task.temperature;
     let corr_rmax_xy = task.correlation_rmax_xy.min(task.l_x / 2).min(task.l_y / 2);
     let corr_rmax_z = task.correlation_rmax_z.min(task.l_z / 2);
+    let correlation_interval = task.correlation_interval.max(1);
 
     for measurement_sweeps in measurement_start..task.sweeps {
         if checkpoint_deadline_reached(checkpoint) {
@@ -250,10 +260,16 @@ pub(crate) fn run_theta_task_with_checkpoint(
         series.push("RhoXY", (rho_x + rho_y) / 2.0);
         series.push("RhoZ", rho_z);
         series.push("Energy", obs.energy);
-        series.push("Magnetization", obs.magnetization);
-        if corr_rmax_xy > 0 || corr_rmax_z > 0 {
-            let corr =
-                measure_theta_correlations(&lattice, None, Some(corr_rmax_xy), Some(corr_rmax_z));
+        series.push("MagnetizationSquared", obs.magnetization_squared);
+        series.push("Chi", beta * volume * obs.magnetization_squared);
+        if (corr_rmax_xy > 0 || corr_rmax_z > 0) && measurement_sweeps % correlation_interval == 0 {
+            let corr = measure_theta_correlations_with_scratch(
+                &lattice,
+                &theta_scratch,
+                None,
+                Some(corr_rmax_xy),
+                Some(corr_rmax_z),
+            );
             for (r, value) in corr.r_xy.iter().zip(corr.corr_x) {
                 series.push(format!("CorrX_r{r}"), value);
             }
