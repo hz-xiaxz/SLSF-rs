@@ -791,6 +791,10 @@ fn theta_carlo_entrypoint_runs_task_and_roundtrips_result_json() {
     assert!(task_result.observables["Energy"].mean.is_finite());
     assert!(task_result.observables["RhoXY"].mean.is_finite());
     assert!(task_result.observables["RhoZ"].mean.is_finite());
+    assert!(task_result.observables["MagnetizationSquared"]
+        .mean
+        .is_finite());
+    assert!(task_result.observables["Chi"].mean.is_finite());
     assert!(task_result.observables["_ll_sweep_time"].mean.is_finite());
     assert!(task_result.observables["_ll_measure_time"].mean.is_finite());
     assert_eq!(task_result.observables["Energy"].bins, 2);

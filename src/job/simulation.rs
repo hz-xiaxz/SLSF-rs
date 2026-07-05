@@ -380,6 +380,8 @@ pub(crate) fn run_theta_task_with_checkpoint(
         series.push_helicity(&obs);
         series.push("Energy", obs.energy);
         series.push("Magnetization", obs.magnetization);
+        series.push("MagnetizationSquared", obs.magnetization.powi(2));
+        series.push("Chi", beta * volume * obs.magnetization.powi(2));
         if corr_rmax_xy > 0 || corr_rmax_z > 0 {
             let corr =
                 measure_theta_correlations(&lattice, None, Some(corr_rmax_xy), Some(corr_rmax_z));
