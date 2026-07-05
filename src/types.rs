@@ -243,7 +243,7 @@ impl WolffScratch {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ThetaObservables {
     pub energy: f64,
-    pub magnetization: f64,
+    pub magnetization_squared: f64,
     pub cos_x: f64,
     pub cos_y: f64,
     pub cos_z: f64,
@@ -303,7 +303,8 @@ pub struct ThetaSimulationResult {
     pub std_rho_sx: f64,
     pub std_rho_sy: f64,
     pub std_rho_sz: f64,
-    pub magnetization: f64,
+    pub magnetization_squared: f64,
+    pub chi: f64,
     pub corr_r: Vec<usize>,
     pub corr_r_xy: Vec<usize>,
     pub corr_r_z: Vec<usize>,

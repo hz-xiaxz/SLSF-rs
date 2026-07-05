@@ -20,6 +20,7 @@ impl Default for ThetaJobConfig {
             correlation_rmax: None,
             correlation_rmax_xy: None,
             correlation_rmax_z: None,
+            correlation_interval: 1,
             run_time: Duration::from_secs(12 * 60 * 60),
             checkpoint_time: Duration::from_secs(30 * 60),
             job_name: "xy_theta_rust".to_string(),
@@ -95,6 +96,9 @@ impl ThetaJobConfig {
             cfg.correlation_rmax = measure.corr_rmax;
             cfg.correlation_rmax_xy = measure.corr_rmax_xy.or(cfg.correlation_rmax);
             cfg.correlation_rmax_z = measure.corr_rmax_z.or(cfg.correlation_rmax);
+            if let Some(value) = measure.correlation_interval.or(measure.corr_interval) {
+                cfg.correlation_interval = value;
+            }
         }
         let options = ThetaRunOptions {
             output_dir: spec.output_dir,
@@ -134,6 +138,7 @@ impl ThetaJobConfig {
             parse_optional_env_value("XY_CORR_RMAX_XY")?.or(cfg.correlation_rmax);
         cfg.correlation_rmax_z =
             parse_optional_env_value("XY_CORR_RMAX_Z")?.or(cfg.correlation_rmax);
+        cfg.correlation_interval = parse_env_value("XY_CORR_INTERVAL", cfg.correlation_interval)?;
         cfg.job_name = std::env::var("XY_JOB_NAME").unwrap_or_else(|_| {
             format!(
                 "xy_carlo_L{}_dJxy{}_dJz{}",
@@ -157,6 +162,9 @@ impl ThetaJobConfig {
         }
         if self.binsize == 0 {
             return Err("binsize must be positive".to_string());
+        }
+        if self.correlation_interval == 0 {
+            return Err("correlation_interval must be positive".to_string());
         }
         if self.sweeps < self.binsize {
             return Err("sweeps must be at least binsize".to_string());
@@ -216,6 +224,7 @@ impl ThetaJobConfig {
                                     .correlation_rmax_xy
                                     .unwrap_or_else(|| l_x.min(l_y) / 2),
                                 correlation_rmax_z: self.correlation_rmax_z.unwrap_or(l_z / 2),
+                                correlation_interval: self.correlation_interval,
                                 j_xy_array: Some(j_xy_array),
                                 j_z_array: Some(j_z_array),
                             });

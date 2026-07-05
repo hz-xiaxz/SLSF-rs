@@ -13,7 +13,9 @@ use rand::{Rng, SeedableRng};
 use serde::{Deserialize, Serialize};
 
 use crate::initialization::{initialize_angles, initialize_two_point_layer_disorder};
-use crate::observables::{measure_theta_correlations, measure_theta_observables_with_scratch};
+use crate::observables::{
+    measure_theta_correlations_with_scratch, measure_theta_observables_with_scratch,
+};
 use crate::types::{
     FastRng, InitMode, Parameters, ThetaLattice, ThetaObservables, ThetaScratch, WolffScratch,
 };

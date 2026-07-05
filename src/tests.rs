@@ -98,11 +98,7 @@ fn theta_energy_magnetization_and_correlations() {
         measure_theta_energy(&lat, &params),
         epsilon = 1e-12
     );
-    assert_abs_diff_eq!(
-        obs.magnetization,
-        measure_magnetization(&lat),
-        epsilon = 1e-12
-    );
+    assert_abs_diff_eq!(obs.magnetization_squared, 1.0, epsilon = 1e-12);
     assert_abs_diff_eq!(obs.cos_x, cos_x, epsilon = 1e-12);
     assert_abs_diff_eq!(obs.cos_y, cos_y, epsilon = 1e-12);
     assert_abs_diff_eq!(obs.cos_z, cos_z, epsilon = 1e-12);
@@ -227,7 +223,8 @@ fn theta_simulation_driver() {
     assert!(res.rho_sx.is_finite());
     assert!(res.rho_sy.is_finite());
     assert!(res.rho_sz.is_finite());
-    assert!((0.0..=1.0).contains(&res.magnetization));
+    assert!((0.0..=1.0).contains(&res.magnetization_squared));
+    assert!(res.chi.is_finite());
     assert_eq!(res.corr_r.len(), 1);
     assert_eq!(res.corr_z.len(), 1);
     assert_eq!(res.num_correlation_measurements, res.num_measurements);
@@ -411,6 +408,7 @@ fn theta_carlo_entrypoint_job_config_and_binning() {
         binsize: 2,
         wolff_steps: 0,
         correlation_rmax: Some(0),
+        correlation_interval: 2,
         job_name: "unit_theta_job".to_string(),
         ..Default::default()
     };
@@ -422,6 +420,7 @@ fn theta_carlo_entrypoint_job_config_and_binning() {
     assert_eq!(job.tasks[0].l_y, 2);
     assert_eq!(job.tasks[0].l_z, 2);
     assert_eq!(job.tasks[0].binsize, 2);
+    assert_eq!(job.tasks[0].correlation_interval, 2);
     assert_eq!(job.tasks[0].j_xy_array.as_ref().unwrap().len(), 2);
     assert_eq!(job.tasks[0].j_z_array.as_ref().unwrap().len(), 2);
 
@@ -464,6 +463,15 @@ fn theta_carlo_entrypoint_job_config_and_binning() {
         std::time::Duration::from_secs(306)
     );
     assert!(toml_options.checkpoint);
+
+    let (toml_measure_cfg, _) = ThetaJobConfig::from_toml_spec(ThetaJobToml {
+        measure: Some(ThetaMeasureToml {
+            corr_interval: Some(3),
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    assert_eq!(toml_measure_cfg.correlation_interval, 3);
 }
 
 #[test]
@@ -490,6 +498,7 @@ fn theta_dynamic_scheduler_skips_completed_claims() {
         correlation_rmax: 0,
         correlation_rmax_xy: 0,
         correlation_rmax_z: 0,
+        correlation_interval: 1,
         j_xy_array: Some(vec![1.0, 1.0]),
         j_z_array: Some(vec![1.0, 1.0]),
     };
@@ -540,6 +549,7 @@ fn theta_dynamic_scheduler_recovers_stale_claims() {
         correlation_rmax: 0,
         correlation_rmax_xy: 0,
         correlation_rmax_z: 0,
+        correlation_interval: 1,
         j_xy_array: Some(vec![1.0, 1.0]),
         j_z_array: Some(vec![1.0, 1.0]),
     };
@@ -640,6 +650,7 @@ fn theta_checkpoint_writes_scheduler_heartbeat() {
         correlation_rmax: 0,
         correlation_rmax_xy: 0,
         correlation_rmax_z: 0,
+        correlation_interval: 1,
         j_xy_array: Some(vec![1.0, 1.0]),
         j_z_array: Some(vec![1.0, 1.0]),
     };
@@ -694,6 +705,7 @@ wolff_steps = 0
 
 [measure]
 corr_rmax = 1
+correlation_interval = 2
 "#,
         output_dir.to_string_lossy()
     );
@@ -709,6 +721,7 @@ corr_rmax = 1
     assert_eq!(cfg.thermalization, 1);
     assert_eq!(cfg.binsize, 2);
     assert_eq!(cfg.correlation_rmax, Some(1));
+    assert_eq!(cfg.correlation_interval, 2);
     assert_eq!(options.output_dir.as_deref(), Some(output_dir.as_path()));
     assert!(options.checkpoint);
     assert_eq!(cfg.make_job().unwrap().tasks.len(), 2);
@@ -774,6 +787,7 @@ fn theta_carlo_entrypoint_runs_task_and_roundtrips_result_json() {
         correlation_rmax: 1,
         correlation_rmax_xy: 1,
         correlation_rmax_z: 1,
+        correlation_interval: 1,
         j_xy_array: Some(vec![1.0, 1.0]),
         j_z_array: Some(vec![1.0, 1.0]),
     };
@@ -800,6 +814,14 @@ fn theta_carlo_entrypoint_runs_task_and_roundtrips_result_json() {
     assert_eq!(task_result.observables["Energy"].bins, 2);
     assert_eq!(task_result.observables["Energy"].bin_length, 2);
     assert!(task_result.observables["CorrXY_r1"].mean.is_finite());
+    assert_eq!(task_result.observables["CorrXY_r1"].internal_bin_len, 2);
+
+    let mut throttled_task = task_result.task.clone();
+    throttled_task.correlation_interval = 2;
+    let throttled = run_theta_task(&throttled_task).unwrap();
+    assert_eq!(throttled.measurements, 4);
+    assert!(throttled.observables["CorrXY_r1"].mean.is_finite());
+    assert_eq!(throttled.observables["CorrXY_r1"].internal_bin_len, 2);
 
     let out_dir = std::env::temp_dir().join(format!("slsf_theta_job_test_{}", std::process::id()));
     let measurement_paths = write_theta_job_measurements(&result, &out_dir).unwrap();

@@ -1,7 +1,9 @@
 use rand::Rng;
 
 use crate::initialization::{initialize_angles, initialize_disorder};
-use crate::observables::{measure_theta_correlations, measure_theta_observables_with_scratch};
+use crate::observables::{
+    measure_theta_correlations_with_scratch, measure_theta_observables_with_scratch,
+};
 use crate::types::{
     validate_proposal_width, validate_temperature, Parameters, ThetaLattice, ThetaScratch,
     ThetaSimulationOptions, ThetaSimulationResult, WolffScratch,
@@ -70,7 +72,7 @@ pub fn run_theta_simulation<R: Rng + ?Sized>(
     let mut sin_x = Vec::with_capacity(num_measurements);
     let mut sin_y = Vec::with_capacity(num_measurements);
     let mut sin_z = Vec::with_capacity(num_measurements);
-    let mut magnetization = Vec::with_capacity(num_measurements);
+    let mut magnetization_squared = Vec::with_capacity(num_measurements);
     let mut corr_x_sum = vec![0.0; corr_rmax_xy_eff];
     let mut corr_y_sum = vec![0.0; corr_rmax_xy_eff];
     let mut corr_xy_sum = vec![0.0; corr_rmax_xy_eff];
@@ -100,13 +102,14 @@ pub fn run_theta_simulation<R: Rng + ?Sized>(
             sin_x.push(obs.sin_x);
             sin_y.push(obs.sin_y);
             sin_z.push(obs.sin_z);
-            magnetization.push(obs.magnetization);
+            magnetization_squared.push(obs.magnetization_squared);
             let idx = energy.len();
             if (corr_rmax_xy_eff > 0 || corr_rmax_z_eff > 0)
                 && (idx - 1) % options.correlation_interval == 0
             {
-                let corr = measure_theta_correlations(
+                let corr = measure_theta_correlations_with_scratch(
                     lattice,
+                    &theta_scratch,
                     None,
                     Some(corr_rmax_xy_eff),
                     Some(corr_rmax_z_eff),
@@ -162,7 +165,8 @@ pub fn run_theta_simulation<R: Rng + ?Sized>(
         std_rho_sx: blocking_stderr(&eff_rho_sx),
         std_rho_sy: blocking_stderr(&eff_rho_sy),
         std_rho_sz: blocking_stderr(&eff_rho_sz),
-        magnetization: mean(&magnetization),
+        magnetization_squared: mean(&magnetization_squared),
+        chi: beta * volume * mean(&magnetization_squared),
         corr_r: (1..=corr_rmax_xy_eff).collect(),
         corr_r_xy: (1..=corr_rmax_xy_eff).collect(),
         corr_r_z: (1..=corr_rmax_z_eff).collect(),
