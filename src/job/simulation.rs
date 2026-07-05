@@ -9,6 +9,18 @@ const HELICITY_SIN2_Y: &str = "_helicity_sin2_y";
 const HELICITY_SIN2_Z: &str = "_helicity_sin2_z";
 
 #[derive(Debug)]
+struct Evaluable {
+    estimate: ObservableEstimate,
+    measurement_bins: Vec<f64>,
+}
+
+struct Evaluator<'a> {
+    binned: BTreeMap<String, BinnedEstimate>,
+    estimates: &'a mut BTreeMap<String, ObservableEstimate>,
+    measurement_bins: &'a mut BTreeMap<String, Vec<f64>>,
+}
+
+#[derive(Debug)]
 struct ObservableSeries {
     accumulators: BTreeMap<String, ScalarAccumulator>,
     binsize: usize,
@@ -67,7 +79,6 @@ impl ObservableSeries {
 
     fn estimates_and_measurement_bins(
         &self,
-        binsize: usize,
         volume: f64,
         beta: f64,
     ) -> Result<
@@ -84,12 +95,12 @@ impl ObservableSeries {
             .collect::<Result<BTreeMap<_, _>, String>>()?;
         let mut measurement_bins = binned
             .iter()
-            .filter(|(name, _)| !name.starts_with("_helicity_"))
+            .filter(|(name, _)| !is_evaluator_ingredient(name))
             .map(|(name, estimate)| (name.clone(), estimate.internal_bins.clone()))
             .collect::<BTreeMap<_, _>>();
         let mut estimates = binned
             .iter()
-            .filter(|(name, _)| !name.starts_with("_helicity_"))
+            .filter(|(name, _)| !is_evaluator_ingredient(name))
             .map(|(name, estimate)| {
                 (
                     name.clone(),
@@ -97,90 +108,171 @@ impl ObservableSeries {
                 )
             })
             .collect::<BTreeMap<_, _>>();
-        if let Some(rho_xy) = helicity_estimate(
-            &binned,
-            [(HELICITY_COS_X, HELICITY_SIN_X, HELICITY_SIN2_X),
-             (HELICITY_COS_Y, HELICITY_SIN_Y, HELICITY_SIN2_Y)],
-            binsize,
-            volume,
-            beta,
-        )? {
-            measurement_bins.insert("RhoXY".to_string(), rho_xy.internal_bins.clone());
-            estimates.insert("RhoXY".to_string(), ObservableEstimate::new(&rho_xy, binsize));
-        }
-        if let Some(rho_z) = helicity_estimate(
-            &binned,
-            [(HELICITY_COS_Z, HELICITY_SIN_Z, HELICITY_SIN2_Z)],
-            binsize,
-            volume,
-            beta,
-        )? {
-            measurement_bins.insert("RhoZ".to_string(), rho_z.internal_bins.clone());
-            estimates.insert("RhoZ".to_string(), ObservableEstimate::new(&rho_z, binsize));
-        }
-        if let (Some(rho_xy), Some(rho_z)) = (
-            estimates.get("RhoXY").and_then(|_| measurement_bins.get("RhoXY")),
-            estimates.get("RhoZ").and_then(|_| measurement_bins.get("RhoZ")),
-        ) {
-            let rho_xy = BinnedEstimate::from_internal_bins(rho_xy.clone(), binsize)?;
-            let rho_z = BinnedEstimate::from_internal_bins(rho_z.clone(), binsize)?;
-            let diff = BinnedEstimate::jackknife_difference(&rho_xy, &rho_z)?;
-            measurement_bins.insert("RhoDifference".to_string(), diff.internal_bins.clone());
-            estimates.insert(
-                "RhoDifference".to_string(),
-                ObservableEstimate::new(&diff, diff.internal_bin_length),
-            );
-        }
+        let mut evaluator = Evaluator::new(binned, &mut estimates, &mut measurement_bins);
+        register_theta_evaluables(&mut evaluator, volume, beta)?;
         Ok((estimates, measurement_bins))
     }
 }
 
-fn helicity_estimate<const N: usize>(
-    binned: &BTreeMap<String, BinnedEstimate>,
-    components: [(&str, &str, &str); N],
-    binsize: usize,
+impl<'a> Evaluator<'a> {
+    fn new(
+        binned: BTreeMap<String, BinnedEstimate>,
+        estimates: &'a mut BTreeMap<String, ObservableEstimate>,
+        measurement_bins: &'a mut BTreeMap<String, Vec<f64>>,
+    ) -> Self {
+        Self {
+            binned,
+            estimates,
+            measurement_bins,
+        }
+    }
+
+    fn evaluate<const N: usize, F>(
+        &mut self,
+        name: &str,
+        ingredients: [&str; N],
+        evaluation: F,
+    ) -> Result<(), String>
+    where
+        F: Fn([f64; N]) -> f64,
+    {
+        if let Some(evaluable) = evaluate(&self.binned, ingredients, evaluation)? {
+            let internal_bin_len = evaluable.estimate.internal_bin_len;
+            self.measurement_bins
+                .insert(name.to_string(), evaluable.measurement_bins.clone());
+            self.estimates.insert(name.to_string(), evaluable.estimate);
+            self.binned.insert(
+                name.to_string(),
+                ScalarAccumulator::from_internal_bins(evaluable.measurement_bins, internal_bin_len)
+                    .estimate()?,
+            );
+        }
+        Ok(())
+    }
+}
+
+fn is_evaluator_ingredient(name: &str) -> bool {
+    name.starts_with("_helicity_")
+}
+
+fn register_theta_evaluables(
+    evaluator: &mut Evaluator<'_>,
     volume: f64,
     beta: f64,
-) -> Result<Option<BinnedEstimate>, String> {
-    let mut component_bins = Vec::with_capacity(N);
-    for (cos_name, sin_name, sin2_name) in components {
-        let (Some(cos), Some(sin), Some(sin2)) = (
-            binned.get(cos_name),
-            binned.get(sin_name),
-            binned.get(sin2_name),
-        ) else {
-            return Ok(None);
-        };
-        let bin_count = cos
-            .internal_bins
-            .len()
-            .min(sin.internal_bins.len())
-            .min(sin2.internal_bins.len());
-        component_bins.push((cos, sin, sin2, bin_count));
-    }
-    let bin_count = component_bins
+) -> Result<(), String> {
+    evaluator.evaluate("Magnetization", ["MagnetizationSquared"], |[mag2]| mag2.sqrt())?;
+    evaluator.evaluate("Chi", ["MagnetizationSquared"], |[mag2]| beta * volume * mag2)?;
+    evaluator.evaluate("SpecificHeat", ["EnergySquared", "Energy"], |[energy2, energy]| {
+        beta * beta * volume * (energy2 - energy * energy)
+    })?;
+    evaluator.evaluate(
+        "RhoXY",
+        [
+            HELICITY_COS_X,
+            HELICITY_SIN_X,
+            HELICITY_SIN2_X,
+            HELICITY_COS_Y,
+            HELICITY_SIN_Y,
+            HELICITY_SIN2_Y,
+        ],
+        |[cos_x, sin_x, sin2_x, cos_y, sin_y, sin2_y]| {
+            let rho_x = cos_x / volume - beta * (sin2_x - sin_x.powi(2)) / volume;
+            let rho_y = cos_y / volume - beta * (sin2_y - sin_y.powi(2)) / volume;
+            (rho_x + rho_y) / 2.0
+        },
+    )?;
+    evaluator.evaluate(
+        "RhoZ",
+        [HELICITY_COS_Z, HELICITY_SIN_Z, HELICITY_SIN2_Z],
+        |[cos_z, sin_z, sin2_z]| cos_z / volume - beta * (sin2_z - sin_z.powi(2)) / volume,
+    )?;
+    evaluator.evaluate("RhoDifference", ["RhoXY", "RhoZ"], |[rho_xy, rho_z]| {
+        rho_xy - rho_z
+    })?;
+    Ok(())
+}
+
+fn evaluate<const N: usize, F>(
+    binned: &BTreeMap<String, BinnedEstimate>,
+    ingredients: [&str; N],
+    evaluation: F,
+) -> Result<Option<Evaluable>, String>
+where
+    F: Fn([f64; N]) -> f64,
+{
+    let Some(used) = ingredients
         .iter()
-        .map(|(_, _, _, bin_count)| *bin_count)
+        .map(|name| binned.get(*name))
+        .collect::<Option<Vec<_>>>()
+    else {
+        return Ok(None);
+    };
+    let internal_bin_length = used
+        .iter()
+        .map(|estimate| estimate.internal_bin_length)
+        .min()
+        .unwrap_or(1);
+    let rebin_length = used
+        .iter()
+        .map(|estimate| estimate.rebin_length)
+        .min()
+        .unwrap_or(1);
+    let internal_bin_count = used
+        .iter()
+        .map(|estimate| estimate.internal_bins.len())
         .min()
         .unwrap_or(0);
-    if bin_count == 0 {
+    if internal_bin_count == 0 {
         return Ok(None);
     }
-    let internal_bins = (0..bin_count)
-        .map(|bin_index| {
-            component_bins
-                .iter()
-                .map(|(cos, sin, sin2, _)| {
-                    cos.internal_bins[bin_index] / volume
-                        - beta
-                            * (sin2.internal_bins[bin_index] - sin.internal_bins[bin_index].powi(2))
-                            / volume
-                })
-                .sum::<f64>()
-                / N as f64
-        })
+    let measurement_bins = (0..internal_bin_count)
+        .map(|index| evaluation(std::array::from_fn(|i| used[i].internal_bins[index])))
         .collect::<Vec<_>>();
-    BinnedEstimate::from_internal_bins(internal_bins, binsize).map(Some)
+    let rebin_count = used
+        .iter()
+        .map(|estimate| estimate.bins.len())
+        .min()
+        .unwrap_or(0);
+    if rebin_count == 0 {
+        return Ok(None);
+    }
+    let rebin_samples = (0..rebin_count)
+        .map(|index| evaluation(std::array::from_fn(|i| used[i].bins[index])))
+        .collect::<Vec<_>>();
+    let (mean, stderr) = jackknife_evaluate(&rebin_samples);
+    let estimate = BinnedEstimate {
+        mean,
+        stderr,
+        bins: rebin_samples,
+        internal_bins: measurement_bins.clone(),
+        internal_bin_length,
+        rebin_length,
+    };
+    Ok(Some(Evaluable {
+        estimate: ObservableEstimate::new(&estimate, internal_bin_length),
+        measurement_bins,
+    }))
+}
+
+fn jackknife_evaluate(rebin_samples: &[f64]) -> (f64, f64) {
+    let sample_count = rebin_samples.len();
+    let complete_mean = mean(rebin_samples);
+    if sample_count <= 1 {
+        return (complete_mean, f64::NAN);
+    }
+    let sum = rebin_samples.iter().sum::<f64>();
+    let jacked = rebin_samples
+        .iter()
+        .map(|sample| (sum - sample) / (sample_count - 1) as f64)
+        .collect::<Vec<_>>();
+    let jacked_mean = mean(&jacked);
+    let bias_corrected_mean = sample_count as f64 * complete_mean - (sample_count - 1) as f64 * jacked_mean;
+    let error = jacked
+        .iter()
+        .map(|value| (value - jacked_mean).powi(2))
+        .sum::<f64>();
+    let error = (((sample_count - 1) as f64) * error / sample_count as f64).sqrt();
+    (bias_corrected_mean, error)
 }
 
 #[cfg(test)]
@@ -204,14 +296,40 @@ mod job_simulation_tests {
         }
 
         let (observables, measurement_bins) = series
-            .estimates_and_measurement_bins(2, 2.0, 1.0)
+            .estimates_and_measurement_bins(2.0, 1.0)
             .expect("helicity estimates");
 
         assert!(!observables.contains_key(HELICITY_COS_X));
+        assert!(!observables.contains_key(HELICITY_SIN2_X));
+        assert!(!observables.contains_key("MagnetizationSquared"));
         assert!((observables["RhoXY"].mean - 0.5).abs() < 1e-12);
         assert!((observables["RhoZ"].mean - 0.0).abs() < 1e-12);
         assert!((observables["RhoDifference"].mean - 0.5).abs() < 1e-12);
         assert_eq!(measurement_bins["RhoXY"], vec![0.5]);
+    }
+
+    #[test]
+    fn evaluator_builds_derived_observables_from_registered_ingredients() {
+        let mut series = ObservableSeries::new(2);
+        for (energy, mag2) in [(1.0, 0.25), (3.0, 0.49), (5.0, 0.81), (7.0, 1.0)] {
+            series.push("Energy", energy);
+            series.push("EnergySquared", energy * energy);
+            series.push("MagnetizationSquared", mag2);
+        }
+
+        let (observables, measurement_bins) = series
+            .estimates_and_measurement_bins(8.0, 2.0)
+            .expect("derived observables");
+
+        assert!(observables.contains_key("EnergySquared"));
+        assert!(observables.contains_key("MagnetizationSquared"));
+        assert_eq!(measurement_bins["Energy"], vec![2.0, 6.0]);
+        assert_eq!(measurement_bins["Magnetization"], vec![0.37_f64.sqrt(), 0.905_f64.sqrt()]);
+        assert_eq!(measurement_bins["Chi"], vec![5.92, 14.48]);
+        assert_eq!(measurement_bins["SpecificHeat"], vec![32.0, 32.0]);
+        assert!((observables["Magnetization"].mean - ((0.37_f64.sqrt() + 0.905_f64.sqrt()) / 2.0)).abs() < 1e-12);
+        assert!((observables["Chi"].mean - 10.2).abs() < 1e-12);
+        assert!((observables["SpecificHeat"].mean - 32.0).abs() < 1e-12);
     }
 }
 
@@ -389,9 +507,8 @@ pub(crate) fn run_theta_task_with_checkpoint(
         let obs = measure_theta_observables_with_scratch(&lattice, &params, &theta_scratch);
         series.push_helicity(&obs);
         series.push("Energy", obs.energy);
-        series.push("Magnetization", obs.magnetization_squared.sqrt());
+        series.push("EnergySquared", obs.energy.powi(2));
         series.push("MagnetizationSquared", obs.magnetization_squared);
-        series.push("Chi", beta * volume * obs.magnetization_squared);
         if (corr_rmax_xy > 0 || corr_rmax_z > 0) && measurement_sweeps % correlation_interval == 0 {
             let corr = measure_theta_correlations_with_scratch(
                 &lattice,
@@ -448,8 +565,8 @@ pub(crate) fn run_theta_task_with_checkpoint(
         write_theta_checkpoint_state_to_path(&state, &checkpoint.path)?;
     }
 
-    let (observables, measurement_bins) =
-        series.estimates_and_measurement_bins(task.binsize, volume, beta)?;
+    let (observables, measurement_bins) = series.estimates_and_measurement_bins(volume, beta)?;
+
     Ok(ThetaTaskResult {
         task: task.clone(),
         task_index,

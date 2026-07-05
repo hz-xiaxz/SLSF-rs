@@ -52,35 +52,6 @@ impl BinnedEstimate {
             rebin_length,
         })
     }
-
-    fn jackknife_difference(left: &Self, right: &Self) -> Result<Self, String> {
-        let bin_count = left.bins.len().min(right.bins.len());
-        if bin_count == 0 {
-            return Err("jackknife difference requires at least one common bin".to_string());
-        }
-        let bins = left
-            .bins
-            .iter()
-            .zip(&right.bins)
-            .take(bin_count)
-            .map(|(left, right)| left - right)
-            .collect::<Vec<_>>();
-        let internal_bins = left
-            .internal_bins
-            .iter()
-            .zip(&right.internal_bins)
-            .take(left.internal_bins.len().min(right.internal_bins.len()))
-            .map(|(left, right)| left - right)
-            .collect::<Vec<_>>();
-        Ok(Self {
-            mean: mean(&bins),
-            stderr: carlo_std_of_mean(&bins),
-            bins,
-            internal_bins,
-            internal_bin_length: left.internal_bin_length.min(right.internal_bin_length),
-            rebin_length: left.rebin_length.min(right.rebin_length),
-        })
-    }
 }
 
 fn mean(values: &[f64]) -> f64 {
