@@ -5,6 +5,10 @@ edition = "2021"
 authors = ["hz-xiaxz hzxiaxz@gmail.com"]
 license = "MIT"
 
+[features]
+default = []
+profile-stats = []
+
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 hdf5-pure = "0.21"

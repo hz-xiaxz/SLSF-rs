@@ -8,6 +8,76 @@ use crate::types::{
 type Site = (usize, usize, usize);
 type SinCosBatch<const LANES: usize> = fn([f64; LANES]) -> ([f64; LANES], [f64; LANES]);
 
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct UpdateProfileStats {
+    pub wolff_clusters: usize,
+    pub wolff_cluster_sites: usize,
+    pub wolff_examined_edges: usize,
+    pub wolff_zero_probability_edges: usize,
+    pub metropolis_scalar_uphill: [usize; 2],
+    pub metropolis_x4_uphill: [usize; 5],
+    pub metropolis_x8_uphill: [usize; 9],
+    pub metropolis_seconds: f64,
+    pub wolff_seconds: f64,
+    pub measurement_seconds: f64,
+}
+
+#[cfg(feature = "profile-stats")]
+thread_local! {
+    static UPDATE_PROFILE_STATS: std::cell::RefCell<UpdateProfileStats> =
+        std::cell::RefCell::new(UpdateProfileStats::default());
+}
+
+#[cfg(feature = "profile-stats")]
+pub fn reset_update_profile_stats() {
+    UPDATE_PROFILE_STATS.with(|stats| *stats.borrow_mut() = UpdateProfileStats::default());
+}
+
+#[cfg(feature = "profile-stats")]
+pub fn take_update_profile_stats() -> UpdateProfileStats {
+    UPDATE_PROFILE_STATS.with(|stats| std::mem::take(&mut *stats.borrow_mut()))
+}
+
+#[cfg(feature = "profile-stats")]
+pub(crate) fn record_profile_phase(metropolis: f64, wolff: f64, measurement: f64) {
+    UPDATE_PROFILE_STATS.with(|stats| {
+        let mut stats = stats.borrow_mut();
+        stats.metropolis_seconds += metropolis;
+        stats.wolff_seconds += wolff;
+        stats.measurement_seconds += measurement;
+    });
+}
+
+#[cfg(feature = "profile-stats")]
+fn record_scalar_uphill(uphill: usize) {
+    UPDATE_PROFILE_STATS.with(|stats| stats.borrow_mut().metropolis_scalar_uphill[uphill] += 1);
+}
+
+#[cfg(feature = "profile-stats")]
+fn record_batch_uphill<const LANES: usize>(uphill: usize) {
+    UPDATE_PROFILE_STATS.with(|stats| {
+        let mut stats = stats.borrow_mut();
+        match LANES {
+            4 => stats.metropolis_x4_uphill[uphill] += 1,
+            8 => stats.metropolis_x8_uphill[uphill] += 1,
+            _ => unreachable!("unsupported Metropolis SIMD lane count"),
+        }
+    });
+}
+
+#[cfg(feature = "profile-stats")]
+fn record_wolff_cluster(scratch: &mut WolffScratch, cluster_size: usize) {
+    let examined_edges = std::mem::take(&mut scratch.examined_edges);
+    let zero_probability_edges = std::mem::take(&mut scratch.zero_probability_edges);
+    UPDATE_PROFILE_STATS.with(|stats| {
+        let mut stats = stats.borrow_mut();
+        stats.wolff_clusters += 1;
+        stats.wolff_cluster_sites += cluster_size;
+        stats.wolff_examined_edges += examined_edges;
+        stats.wolff_zero_probability_edges += zero_probability_edges;
+    });
+}
+
 #[derive(Debug, Clone, Copy)]
 struct Neighbor {
     site: Site,
@@ -125,9 +195,9 @@ fn local_theta_energy_from_trig(sin_theta: f64, cos_theta: f64, hx: f64, hy: f64
 #[allow(clippy::too_many_arguments)]
 fn local_metropolis_step_at_unchecked<R: Rng + ?Sized>(
     lattice: &mut ThetaLattice,
-    params: &Parameters,
     scratch: &mut ThetaScratch,
     width: f64,
+    beta: f64,
     idx: usize,
     x: usize,
     y: usize,
@@ -142,9 +212,12 @@ fn local_metropolis_step_at_unchecked<R: Rng + ?Sized>(
         local_theta_energy_from_trig(scratch.sin_theta[idx], scratch.cos_theta[idx], hx, hy);
     let delta_energy = local_theta_energy_from_trig(new_sin, new_cos, hx, hy) - old_energy;
 
-    if delta_energy <= 0.0
-        || rng.random::<f64>() < crate::fast_math::exp(-delta_energy / params.temperature)
+    #[cfg(feature = "profile-stats")]
     {
+        crate::updates::record_scalar_uphill((delta_energy > 0.0) as usize);
+    }
+
+    if delta_energy <= 0.0 || rng.random::<f64>() < crate::fast_math::exp(-delta_energy * beta) {
         lattice.theta[idx] = theta_new;
         scratch.set_site_trig(idx, new_sin, new_cos);
         true
@@ -167,16 +240,26 @@ pub(crate) fn local_metropolis_step_unchecked<R: Rng + ?Sized>(
     let xy = idx - z * plane;
     let y = xy / lattice.l_x;
     let x = xy - y * lattice.l_x;
-    local_metropolis_step_at_unchecked(lattice, params, scratch, width, idx, x, y, z, rng)
+    local_metropolis_step_at_unchecked(
+        lattice,
+        scratch,
+        width,
+        1.0 / params.temperature,
+        idx,
+        x,
+        y,
+        z,
+        rng,
+    )
 }
 
 #[inline]
 #[allow(clippy::too_many_arguments)]
 fn local_metropolis_step_x_batch<const LANES: usize, R: Rng + ?Sized>(
     lattice: &mut ThetaLattice,
-    params: &Parameters,
     scratch: &mut ThetaScratch,
     width: f64,
+    beta: f64,
     x0: usize,
     y: usize,
     z: usize,
@@ -218,13 +301,15 @@ fn local_metropolis_step_x_batch<const LANES: usize, R: Rng + ?Sized>(
             local_theta_energy_from_trig(new_sin[lane], new_cos[lane], hx[lane], hy[lane])
                 - old_energy[lane];
         if delta_energy[lane] > 0.0 {
-            exp_arg[uphill_count] = -delta_energy[lane] / params.temperature;
+            exp_arg[uphill_count] = -delta_energy[lane] * beta;
             uphill_lane[uphill_count] = lane;
             uphill_count += 1;
         }
     }
 
     let mut accept_prob = [1.0; LANES];
+    #[cfg(feature = "profile-stats")]
+    record_batch_uphill::<LANES>(uphill_count);
     if uphill_count == LANES {
         accept_prob = exp_batch(exp_arg);
     } else {
@@ -249,9 +334,9 @@ fn local_metropolis_step_x_batch<const LANES: usize, R: Rng + ?Sized>(
 #[allow(clippy::too_many_arguments)]
 fn local_metropolis_step_x_batch4_unchecked<R: Rng + ?Sized>(
     lattice: &mut ThetaLattice,
-    params: &Parameters,
     scratch: &mut ThetaScratch,
     width: f64,
+    beta: f64,
     x0: usize,
     y: usize,
     z: usize,
@@ -259,9 +344,9 @@ fn local_metropolis_step_x_batch4_unchecked<R: Rng + ?Sized>(
 ) -> usize {
     local_metropolis_step_x_batch(
         lattice,
-        params,
         scratch,
         width,
+        beta,
         x0,
         y,
         z,
@@ -275,9 +360,9 @@ fn local_metropolis_step_x_batch4_unchecked<R: Rng + ?Sized>(
 #[allow(clippy::too_many_arguments)]
 fn local_metropolis_step_x_batch8_unchecked<R: Rng + ?Sized>(
     lattice: &mut ThetaLattice,
-    params: &Parameters,
     scratch: &mut ThetaScratch,
     width: f64,
+    beta: f64,
     x0: usize,
     y: usize,
     z: usize,
@@ -285,9 +370,9 @@ fn local_metropolis_step_x_batch8_unchecked<R: Rng + ?Sized>(
 ) -> usize {
     local_metropolis_step_x_batch(
         lattice,
-        params,
         scratch,
         width,
+        beta,
         x0,
         y,
         z,
@@ -340,6 +425,7 @@ pub fn metropolis_sweep_with_scratch<R: Rng + ?Sized>(
     validate_red_black_lattice(lattice)?;
 
     let mut accepted = 0usize;
+    let beta = 1.0 / params.temperature;
     let use_batch8 = crate::fast_math::has_avx512_f64_lanes();
     for parity in 0..2usize {
         for z in 0..lattice.l_z {
@@ -349,21 +435,21 @@ pub fn metropolis_sweep_with_scratch<R: Rng + ?Sized>(
                 if use_batch8 {
                     while x + 14 < lattice.l_x {
                         accepted += local_metropolis_step_x_batch8_unchecked(
-                            lattice, params, scratch, width, x, y, z, rng,
+                            lattice, scratch, width, beta, x, y, z, rng,
                         );
                         x += 16;
                     }
                 }
                 while x + 6 < lattice.l_x {
                     accepted += local_metropolis_step_x_batch4_unchecked(
-                        lattice, params, scratch, width, x, y, z, rng,
+                        lattice, scratch, width, beta, x, y, z, rng,
                     );
                     x += 8;
                 }
                 while x < lattice.l_x {
                     let idx = lattice.idx(x, y, z);
                     accepted += local_metropolis_step_at_unchecked(
-                        lattice, params, scratch, width, idx, x, y, z, rng,
+                        lattice, scratch, width, beta, idx, x, y, z, rng,
                     ) as usize;
                     x += 2;
                 }
@@ -403,31 +489,37 @@ fn try_add_wolff_neighbor<R: Rng + ?Sized>(
     phi: f64,
     sin_phi: f64,
     cos_phi: f64,
-    site: Site,
+    ri: f64,
     neighbor: Neighbor,
     rng: &mut R,
 ) {
-    let (x, y, z) = site;
     let (xn, yn, zn) = neighbor.site;
     let nidx = lattice.idx(xn, yn, zn);
     if scratch.in_cluster[nidx] {
         return;
     }
+    #[cfg(feature = "profile-stats")]
+    {
+        scratch.examined_edges += 1;
+    }
 
-    let idx = lattice.idx(x, y, z);
-    let (ri, rj) = match theta_scratch {
-        Some(theta_scratch) => (
-            theta_scratch.cos_theta[idx] * cos_phi + theta_scratch.sin_theta[idx] * sin_phi,
-            theta_scratch.cos_theta[nidx] * cos_phi + theta_scratch.sin_theta[nidx] * sin_phi,
-        ),
-        None => (
-            crate::fast_math::cos(lattice.theta[idx] - phi),
-            crate::fast_math::cos(lattice.theta[nidx] - phi),
-        ),
+    let rj = match theta_scratch {
+        Some(theta_scratch) => {
+            theta_scratch.cos_theta[nidx] * cos_phi + theta_scratch.sin_theta[nidx] * sin_phi
+        }
+        None => crate::fast_math::cos(lattice.theta[nidx] - phi),
     };
+    if neighbor.coupling * ri * rj <= 0.0 {
+        #[cfg(feature = "profile-stats")]
+        {
+            scratch.zero_probability_edges += 1;
+        }
+        return;
+    }
     if rng.random::<f64>() < wolff_add_probability(beta, neighbor.coupling, ri, rj) {
         scratch.in_cluster[nidx] = true;
         scratch.stack.push((xn, yn, zn));
+        scratch.cluster_sites.push(nidx);
     }
 }
 
@@ -450,13 +542,19 @@ pub fn wolff_cluster_step_with_theta_scratch<R: Rng + ?Sized>(
     let y0 = rng.random_range(0..lattice.l_y);
     let z0 = rng.random_range(0..lattice.l_z);
 
-    scratch.in_cluster.fill(false);
+    debug_assert!(scratch.cluster_sites.is_empty());
     scratch.stack.clear();
     let seed_idx = lattice.idx(x0, y0, z0);
     scratch.in_cluster[seed_idx] = true;
     scratch.stack.push((x0, y0, z0));
+    scratch.cluster_sites.push(seed_idx);
 
-    while let Some(site @ (x, y, z)) = scratch.stack.pop() {
+    while let Some((x, y, z)) = scratch.stack.pop() {
+        let idx = lattice.idx(x, y, z);
+        let ri = match theta_scratch.as_deref() {
+            Some(ts) => ts.cos_theta[idx] * cos_phi + ts.sin_theta[idx] * sin_phi,
+            None => crate::fast_math::cos(lattice.theta[idx] - phi),
+        };
         for neighbor in neighbors!(lattice, params, x, y, z) {
             try_add_wolff_neighbor(
                 lattice,
@@ -466,34 +564,33 @@ pub fn wolff_cluster_step_with_theta_scratch<R: Rng + ?Sized>(
                 phi,
                 sin_phi,
                 cos_phi,
-                site,
+                ri,
                 neighbor,
                 rng,
             );
         }
     }
 
-    let mut cluster_size = 0usize;
+    let cluster_size = scratch.cluster_sites.len();
+    #[cfg(feature = "profile-stats")]
+    record_wolff_cluster(scratch, cluster_size);
     match theta_scratch {
         Some(ts) => {
-            for idx in 0..scratch.in_cluster.len() {
-                if scratch.in_cluster[idx] {
-                    let new_theta = wolff_reflect_angle(lattice.theta[idx], phi);
-                    lattice.theta[idx] = new_theta;
-                    ts.update_site(idx, new_theta);
-                    cluster_size += 1;
-                }
+            for &idx in &scratch.cluster_sites {
+                let new_theta = wolff_reflect_angle(lattice.theta[idx], phi);
+                lattice.theta[idx] = new_theta;
+                ts.update_site(idx, new_theta);
+                scratch.in_cluster[idx] = false;
             }
         }
         None => {
-            for idx in 0..scratch.in_cluster.len() {
-                if scratch.in_cluster[idx] {
-                    lattice.theta[idx] = wolff_reflect_angle(lattice.theta[idx], phi);
-                    cluster_size += 1;
-                }
+            for &idx in &scratch.cluster_sites {
+                lattice.theta[idx] = wolff_reflect_angle(lattice.theta[idx], phi);
+                scratch.in_cluster[idx] = false;
             }
         }
     }
+    scratch.cluster_sites.clear();
     Ok(cluster_size)
 }
 

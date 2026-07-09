@@ -478,6 +478,8 @@ pub(crate) fn run_theta_task_with_checkpoint(
     let mut theta_scratch = ThetaScratch::new(&lattice);
     let mut wolff_scratch = WolffScratch::new(&lattice);
     let mut last_checkpoint = Instant::now();
+    #[cfg(feature = "profile-stats")]
+    crate::updates::reset_update_profile_stats();
 
     let mut completed_thermalization_sweeps = thermalization_start;
     let mut completed_measurement_sweeps = measurement_start;
@@ -486,6 +488,8 @@ pub(crate) fn run_theta_task_with_checkpoint(
         if checkpoint_deadline_reached(checkpoint) {
             break;
         }
+        #[cfg(feature = "profile-stats")]
+        let thermal_metropolis_started = Instant::now();
         acceptance_sum += metropolis_sweep_with_scratch(
             &mut lattice,
             &params,
@@ -494,6 +498,10 @@ pub(crate) fn run_theta_task_with_checkpoint(
             &mut rng,
         )?;
         acceptance_count += 1;
+        #[cfg(feature = "profile-stats")]
+        let thermal_metropolis_seconds = thermal_metropolis_started.elapsed().as_secs_f64();
+        #[cfg(feature = "profile-stats")]
+        let thermal_wolff_started = Instant::now();
         for _ in 0..task.wolff_steps {
             wolff_cluster_step_with_theta_scratch(
                 &mut lattice,
@@ -503,6 +511,12 @@ pub(crate) fn run_theta_task_with_checkpoint(
                 &mut rng,
             )?;
         }
+        #[cfg(feature = "profile-stats")]
+        crate::updates::record_profile_phase(
+            thermal_metropolis_seconds,
+            thermal_wolff_started.elapsed().as_secs_f64(),
+            0.0,
+        );
         completed_thermalization_sweeps = thermalization_sweeps + 1;
         maybe_write_theta_checkpoint(
             checkpoint,
@@ -538,6 +552,10 @@ pub(crate) fn run_theta_task_with_checkpoint(
             &mut rng,
         )?;
         acceptance_count += 1;
+        #[cfg(feature = "profile-stats")]
+        let metropolis_seconds = sweep_started.elapsed().as_secs_f64();
+        #[cfg(feature = "profile-stats")]
+        let wolff_started = Instant::now();
         for _ in 0..task.wolff_steps {
             wolff_cluster_step_with_theta_scratch(
                 &mut lattice,
@@ -547,6 +565,8 @@ pub(crate) fn run_theta_task_with_checkpoint(
                 &mut rng,
             )?;
         }
+        #[cfg(feature = "profile-stats")]
+        let wolff_seconds = wolff_started.elapsed().as_secs_f64();
         let sweep_seconds = sweep_started.elapsed().as_secs_f64();
 
         let measure_started = Instant::now();
@@ -577,6 +597,8 @@ pub(crate) fn run_theta_task_with_checkpoint(
             }
         }
         let measure_seconds = measure_started.elapsed().as_secs_f64();
+        #[cfg(feature = "profile-stats")]
+        crate::updates::record_profile_phase(metropolis_seconds, wolff_seconds, measure_seconds);
         series.push("_ll_sweep_time", sweep_seconds);
         series.push("_ll_measure_time", measure_seconds);
         completed_measurement_sweeps = measurement_sweeps + 1;
@@ -612,6 +634,25 @@ pub(crate) fn run_theta_task_with_checkpoint(
     }
 
     let (observables, measurement_bins) = series.estimates_and_measurement_bins(volume, beta)?;
+
+    #[cfg(feature = "profile-stats")]
+    {
+        let stats = crate::updates::take_update_profile_stats();
+        eprintln!(
+            "profile-stats task={} metropolis_s={:.6} wolff_s={:.6} measurement_s={:.6} wolff_clusters={} wolff_sites={} examined_edges={} zero_probability_edges={} scalar_uphill={:?} x4_uphill={:?} x8_uphill={:?}",
+            task.name,
+            stats.metropolis_seconds,
+            stats.wolff_seconds,
+            stats.measurement_seconds,
+            stats.wolff_clusters,
+            stats.wolff_cluster_sites,
+            stats.wolff_examined_edges,
+            stats.wolff_zero_probability_edges,
+            stats.metropolis_scalar_uphill,
+            stats.metropolis_x4_uphill,
+            stats.metropolis_x8_uphill,
+        );
+    }
 
     Ok(ThetaTaskResult {
         task: task.clone(),

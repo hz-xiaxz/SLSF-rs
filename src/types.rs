@@ -216,6 +216,11 @@ impl ThetaScratch {
 pub struct WolffScratch {
     pub(crate) in_cluster: Vec<bool>,
     pub(crate) stack: Vec<(usize, usize, usize)>,
+    pub(crate) cluster_sites: Vec<usize>,
+    #[cfg(feature = "profile-stats")]
+    pub(crate) examined_edges: usize,
+    #[cfg(feature = "profile-stats")]
+    pub(crate) zero_probability_edges: usize,
     dims: (usize, usize, usize),
 }
 
@@ -225,6 +230,11 @@ impl WolffScratch {
         Self {
             in_cluster: vec![false; volume],
             stack: Vec::with_capacity(volume),
+            cluster_sites: Vec::with_capacity(volume),
+            #[cfg(feature = "profile-stats")]
+            examined_edges: 0,
+            #[cfg(feature = "profile-stats")]
+            zero_probability_edges: 0,
             dims: (lattice.l_x, lattice.l_y, lattice.l_z),
         }
     }

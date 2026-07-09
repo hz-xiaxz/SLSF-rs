@@ -381,6 +381,20 @@ fn theta_wolff_cluster_update() {
     .unwrap();
     assert!((1..=4 * 4 * 4).contains(&cluster_size));
     assert!(lat.theta.iter().all(|&v| (0.0..TWO_PI).contains(&v)));
+    assert!(scratch.cluster_sites.is_empty());
+    assert!(scratch.in_cluster.iter().all(|&in_cluster| !in_cluster));
+
+    let second_cluster_size = wolff_cluster_step_with_theta_scratch(
+        &mut lat,
+        &params,
+        &mut scratch,
+        Some(&mut theta_scratch),
+        &mut rng,
+    )
+    .unwrap();
+    assert!((1..=4 * 4 * 4).contains(&second_cluster_size));
+    assert!(scratch.cluster_sites.is_empty());
+    assert!(scratch.in_cluster.iter().all(|&in_cluster| !in_cluster));
 }
 
 #[test]
