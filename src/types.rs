@@ -68,11 +68,10 @@ impl TryRng for FastRng {
     }
 
     fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Self::Error> {
-        let mut chunks = dest.chunks_exact_mut(8);
-        for chunk in &mut chunks {
+        let (chunks, remainder) = dest.as_chunks_mut::<8>();
+        for chunk in chunks {
             chunk.copy_from_slice(&self.try_next_u64()?.to_le_bytes());
         }
-        let remainder = chunks.into_remainder();
         if !remainder.is_empty() {
             let word = self.try_next_u64()?.to_le_bytes();
             remainder.copy_from_slice(&word[..remainder.len()]);

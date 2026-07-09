@@ -284,6 +284,7 @@ pub(crate) fn write_scheduler_heartbeat(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn maybe_write_theta_checkpoint(
     checkpoint: Option<&ThetaCheckpointRuntime>,
     last_checkpoint: &mut Instant,

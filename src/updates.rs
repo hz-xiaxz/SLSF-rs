@@ -6,6 +6,7 @@ use crate::types::{
 };
 
 type Site = (usize, usize, usize);
+type SinCosBatch<const LANES: usize> = fn([f64; LANES]) -> ([f64; LANES], [f64; LANES]);
 
 #[derive(Debug, Clone, Copy)]
 struct Neighbor {
@@ -121,6 +122,7 @@ fn local_theta_energy_from_trig(sin_theta: f64, cos_theta: f64, hx: f64, hy: f64
 }
 
 #[inline]
+#[allow(clippy::too_many_arguments)]
 fn local_metropolis_step_at_unchecked<R: Rng + ?Sized>(
     lattice: &mut ThetaLattice,
     params: &Parameters,
@@ -169,6 +171,7 @@ pub(crate) fn local_metropolis_step_unchecked<R: Rng + ?Sized>(
 }
 
 #[inline]
+#[allow(clippy::too_many_arguments)]
 fn local_metropolis_step_x_batch<const LANES: usize, R: Rng + ?Sized>(
     lattice: &mut ThetaLattice,
     params: &Parameters,
@@ -178,7 +181,7 @@ fn local_metropolis_step_x_batch<const LANES: usize, R: Rng + ?Sized>(
     y: usize,
     z: usize,
     rng: &mut R,
-    sin_cos_batch: fn([f64; LANES]) -> ([f64; LANES], [f64; LANES]),
+    sin_cos_batch: SinCosBatch<LANES>,
     exp_batch: fn([f64; LANES]) -> [f64; LANES],
 ) -> usize {
     let mut idxs = [0usize; LANES];
@@ -243,6 +246,7 @@ fn local_metropolis_step_x_batch<const LANES: usize, R: Rng + ?Sized>(
 }
 
 #[inline]
+#[allow(clippy::too_many_arguments)]
 fn local_metropolis_step_x_batch4_unchecked<R: Rng + ?Sized>(
     lattice: &mut ThetaLattice,
     params: &Parameters,
@@ -268,6 +272,7 @@ fn local_metropolis_step_x_batch4_unchecked<R: Rng + ?Sized>(
 }
 
 #[inline]
+#[allow(clippy::too_many_arguments)]
 fn local_metropolis_step_x_batch8_unchecked<R: Rng + ?Sized>(
     lattice: &mut ThetaLattice,
     params: &Parameters,
@@ -313,7 +318,10 @@ pub fn local_metropolis_step<R: Rng + ?Sized>(
 
 #[inline]
 fn validate_red_black_lattice(lattice: &ThetaLattice) -> Result<(), String> {
-    if lattice.l_x % 2 != 0 || lattice.l_y % 2 != 0 || lattice.l_z % 2 != 0 {
+    if !lattice.l_x.is_multiple_of(2)
+        || !lattice.l_y.is_multiple_of(2)
+        || !lattice.l_z.is_multiple_of(2)
+    {
         return Err("red-black Metropolis sweep requires even lattice dimensions".to_string());
     }
     Ok(())
@@ -386,6 +394,7 @@ pub fn wolff_reflect_angle(theta: f64, phi: f64) -> f64 {
     crate::types::wrap_angle(2.0 * phi + std::f64::consts::PI - theta)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn try_add_wolff_neighbor<R: Rng + ?Sized>(
     lattice: &ThetaLattice,
     scratch: &mut WolffScratch,

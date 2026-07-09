@@ -18,6 +18,10 @@ struct Evaluator<'a> {
     estimates: &'a mut BTreeMap<String, ObservableEstimate>,
 }
 
+type ObservableEstimates = BTreeMap<String, ObservableEstimate>;
+type MeasurementBins = BTreeMap<String, Vec<f64>>;
+type ObservableSummary = (ObservableEstimates, MeasurementBins);
+
 #[derive(Debug)]
 struct ObservableSeries {
     accumulators: BTreeMap<String, ScalarAccumulator>,
@@ -79,13 +83,7 @@ impl ObservableSeries {
         &self,
         volume: f64,
         beta: f64,
-    ) -> Result<
-        (
-            BTreeMap<String, ObservableEstimate>,
-            BTreeMap<String, Vec<f64>>,
-        ),
-        String,
-    > {
+    ) -> Result<ObservableSummary, String> {
         let binned = self
             .accumulators
             .iter()

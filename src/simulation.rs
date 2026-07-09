@@ -119,8 +119,8 @@ pub fn run_theta_simulation<R: Rng + ?Sized>(
                     corr_y_sum[i] += corr.corr_y[i];
                     corr_xy_sum[i] += corr.corr_xy[i];
                 }
-                for i in 0..corr_rmax_z_eff {
-                    corr_z_sum[i] += corr.corr_z[i];
+                for (sum, value) in corr_z_sum.iter_mut().zip(corr.corr_z) {
+                    *sum += value;
                 }
                 corr_measurements += 1;
             }
