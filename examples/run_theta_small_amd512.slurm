@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=slsf-small
-#SBATCH --partition=amd_512
+#SBATCH --partition=amd_m9_768
 #SBATCH --nodes=1
 #SBATCH --ntasks=64
 #SBATCH --cpus-per-task=1
@@ -10,8 +10,15 @@
 
 set -euo pipefail
 
-source /public1/soft/modules/module.sh
-module load mpi
+MODULE_INIT=${MODULE_INIT:-/publicfs10/fs10-share/soft/share-soft/modules/module.sh}
+MPI_MODULE=${MPI_MODULE:-mpi/oneAPI/2022.1}
+if [ -r "$MODULE_INIT" ]; then
+    source "$MODULE_INIT"
+    module load "$MPI_MODULE"
+else
+    echo "module init script not found: $MODULE_INIT" >&2
+    exit 1
+fi
 
 CONFIG=${CONFIG:-examples/theta_jxy12_prod_small.toml}
 TARGET_DIR=${TARGET_DIR:-target/native-nightly}
