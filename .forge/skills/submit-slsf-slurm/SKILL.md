@@ -57,15 +57,27 @@ Run `$CTRL status`. If failed or uncertain, run `$CTRL logs`. Do not test or syn
    - `worktree`: include local tracked/untracked work while excluding git metadata, build products, results, and run records.
    - If relevant uncommitted changes exist and intent is unclear, ask once which source to run.
 3. Run `cargo +nightly test`.
-4. Submit atomically:
+4. Submit atomically through the controller for normal jobs. For an explicitly requested benchmark/profile job, use the checked-in Slurm script with `PROFILE=benchmark|stat|record`; never emulate profiling with an ad-hoc `srun`, `salloc`, or `sbatch --wrap` command.
 
    ```bash
    $CTRL submit examples/<config>.toml --source <head|worktree> --wait-start
    ```
 
    Submission runs `slsf check`, syncs and verifies the remote tree, submits with `sbatch`, and atomically records the job id plus config, output, revision, dirty state, source mode, and manifest.
-5. For a smoke job, use bounded waiting. A timeout means the job continues; it is not failure.
-6. For a production job, confirm startup and return without a long blocking wait.
+5. Before any profile submission, require exactly one expanded task and select:
+   - `PROFILE=benchmark`: single-rank release binary without counters.
+   - `PROFILE=stat`: single-rank profiling binary with hardware counters; add `CARGO_FEATURES=profile-stats` when phase/histogram statistics are required.
+   - `PROFILE=record`: single-rank call-graph recording.
+   Never use `PROFILE=none` for a one-task benchmark because it launches the production MPI rank count.
+6. Set an explicit semantic top-level job name derived from the config, such as `theta-l64-s1000-benchmark`. Reject generic names including `bash`, `sh`, `slsf`, `test`, and `job`.
+7. Immediately after submission, query the top-level allocation and verify all of the following before reporting startup:
+   - `JobName` equals the intended semantic name and is not `bash`.
+   - partition and requested task count match the intended mode.
+   - benchmark/profile modes execute one application rank.
+   - command points to the checked-in Slurm script, not a shell allocation.
+   Cancel the new job immediately if any check fails, then fix the submission path before retrying.
+8. For a smoke job, use bounded waiting. A timeout means the job continues; it is not failure.
+9. For a production job, confirm startup and return without a long blocking wait.
 
 ### Completed result
 
@@ -91,6 +103,9 @@ Ensure `name` and `output_dir` are unique enough that trial and production resul
 - SSH failure: run `$CTRL doctor` and verify the configured target.
 - Missing from `squeue`: trust the controller's `sacct` fallback; do not call it complete without `COMPLETED` and exit code `0:0`.
 - Build/application failure: run `$CTRL logs`, fix locally, rerun `cargo +nightly test`, then submit a new job. Do not mutate an existing run record.
+- Generic `bash`/`sh` allocation: cancel it immediately. Never leave an interactive or diagnostic shell allocation queued, and never use a shell allocation to inspect a running production node.
+- Compute-node inspection: perform it only inside a purpose-named checked-in Slurm job. Do not attach `srun --jobid ... bash` to an existing allocation.
+- One-task benchmark launched with multiple ranks: cancel it and resubmit with `PROFILE=benchmark`, `stat`, or `record`; its timing and merge result are invalid.
 - `PENDING` or `RUNNING`: never treat an existing result JSON as completion evidence.
 - Fetch refusal: inspect status/logs rather than bypassing the completion guard.
 
