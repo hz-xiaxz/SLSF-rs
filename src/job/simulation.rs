@@ -11,13 +11,11 @@ const HELICITY_SIN2_Z: &str = "_helicity_sin2_z";
 #[derive(Debug)]
 struct Evaluable {
     estimate: ObservableEstimate,
-    measurement_bins: Vec<f64>,
 }
 
 struct Evaluator<'a> {
     binned: BTreeMap<String, BinnedEstimate>,
     estimates: &'a mut BTreeMap<String, ObservableEstimate>,
-    measurement_bins: &'a mut BTreeMap<String, Vec<f64>>,
 }
 
 #[derive(Debug)]
@@ -93,14 +91,12 @@ impl ObservableSeries {
             .iter()
             .map(|(name, acc)| Ok((name.clone(), acc.estimate()?)))
             .collect::<Result<BTreeMap<_, _>, String>>()?;
-        let mut measurement_bins = binned
+        let measurement_bins = binned
             .iter()
-            .filter(|(name, _)| !is_evaluator_ingredient(name))
             .map(|(name, estimate)| (name.clone(), estimate.internal_bins.clone()))
             .collect::<BTreeMap<_, _>>();
         let mut estimates = binned
             .iter()
-            .filter(|(name, _)| !is_evaluator_ingredient(name))
             .map(|(name, estimate)| {
                 (
                     name.clone(),
@@ -108,7 +104,7 @@ impl ObservableSeries {
                 )
             })
             .collect::<BTreeMap<_, _>>();
-        let mut evaluator = Evaluator::new(binned, &mut estimates, &mut measurement_bins);
+        let mut evaluator = Evaluator::new(binned, &mut estimates);
         register_theta_evaluables(&mut evaluator, volume, beta)?;
         Ok((estimates, measurement_bins))
     }
@@ -118,13 +114,8 @@ impl<'a> Evaluator<'a> {
     fn new(
         binned: BTreeMap<String, BinnedEstimate>,
         estimates: &'a mut BTreeMap<String, ObservableEstimate>,
-        measurement_bins: &'a mut BTreeMap<String, Vec<f64>>,
     ) -> Self {
-        Self {
-            binned,
-            estimates,
-            measurement_bins,
-        }
+        Self { binned, estimates }
     }
 
     fn evaluate<const N: usize, F>(
@@ -137,22 +128,10 @@ impl<'a> Evaluator<'a> {
         F: Fn([f64; N]) -> f64,
     {
         if let Some(evaluable) = evaluate(&self.binned, ingredients, evaluation)? {
-            let internal_bin_len = evaluable.estimate.internal_bin_len;
-            self.measurement_bins
-                .insert(name.to_string(), evaluable.measurement_bins.clone());
             self.estimates.insert(name.to_string(), evaluable.estimate);
-            self.binned.insert(
-                name.to_string(),
-                ScalarAccumulator::from_internal_bins(evaluable.measurement_bins, internal_bin_len)
-                    .estimate()?,
-            );
         }
         Ok(())
     }
-}
-
-fn is_evaluator_ingredient(name: &str) -> bool {
-    name.starts_with("_helicity_")
 }
 
 fn register_theta_evaluables(
@@ -186,9 +165,6 @@ fn register_theta_evaluables(
         [HELICITY_COS_Z, HELICITY_SIN_Z, HELICITY_SIN2_Z],
         |[cos_z, sin_z, sin2_z]| cos_z / volume - beta * (sin2_z - sin_z.powi(2)) / volume,
     )?;
-    evaluator.evaluate("RhoDifference", ["RhoXY", "RhoZ"], |[rho_xy, rho_z]| {
-        rho_xy - rho_z
-    })?;
     Ok(())
 }
 
@@ -217,17 +193,6 @@ where
         .map(|estimate| estimate.rebin_length)
         .min()
         .unwrap_or(1);
-    let internal_bin_count = used
-        .iter()
-        .map(|estimate| estimate.internal_bins.len())
-        .min()
-        .unwrap_or(0);
-    if internal_bin_count == 0 {
-        return Ok(None);
-    }
-    let measurement_bins = (0..internal_bin_count)
-        .map(|index| evaluation(std::array::from_fn(|i| used[i].internal_bins[index])))
-        .collect::<Vec<_>>();
     let rebin_count = used
         .iter()
         .map(|estimate| estimate.bins.len())
@@ -236,43 +201,66 @@ where
     if rebin_count == 0 {
         return Ok(None);
     }
-    let rebin_samples = (0..rebin_count)
-        .map(|index| evaluation(std::array::from_fn(|i| used[i].bins[index])))
-        .collect::<Vec<_>>();
-    let (mean, stderr) = jackknife_evaluate(&rebin_samples);
+    let rebin_samples = jackknife_evaluate(&used, rebin_count, evaluation);
     let estimate = BinnedEstimate {
-        mean,
-        stderr,
-        bins: rebin_samples,
-        internal_bins: measurement_bins.clone(),
+        mean: rebin_samples.mean,
+        stderr: rebin_samples.stderr,
+        bins: rebin_samples.jacked_evals,
+        internal_bins: Vec::new(),
         internal_bin_length,
         rebin_length,
     };
     Ok(Some(Evaluable {
         estimate: ObservableEstimate::new(&estimate, internal_bin_length),
-        measurement_bins,
     }))
 }
 
-fn jackknife_evaluate(rebin_samples: &[f64]) -> (f64, f64) {
-    let sample_count = rebin_samples.len();
-    let complete_mean = mean(rebin_samples);
+struct JackknifeEstimate {
+    mean: f64,
+    stderr: f64,
+    jacked_evals: Vec<f64>,
+}
+
+fn jackknife_evaluate<const N: usize, F>(
+    sample_set: &[&BinnedEstimate],
+    sample_count: usize,
+    evaluation: F,
+) -> JackknifeEstimate
+where
+    F: Fn([f64; N]) -> f64,
+{
+    let sums = std::array::from_fn::<_, N, _>(|i| {
+        sample_set[i].bins[..sample_count].iter().sum::<f64>()
+    });
+    let complete_eval = evaluation(std::array::from_fn(|i| sums[i] / sample_count as f64));
     if sample_count <= 1 {
-        return (complete_mean, f64::NAN);
+        return JackknifeEstimate {
+            mean: complete_eval,
+            stderr: f64::NAN,
+            jacked_evals: vec![complete_eval],
+        };
     }
-    let sum = rebin_samples.iter().sum::<f64>();
-    let jacked = rebin_samples
-        .iter()
-        .map(|sample| (sum - sample) / (sample_count - 1) as f64)
+
+    let jacked_evals = (0..sample_count)
+        .map(|sample_index| {
+            evaluation(std::array::from_fn(|i| {
+                (sums[i] - sample_set[i].bins[sample_index]) / (sample_count - 1) as f64
+            }))
+        })
         .collect::<Vec<_>>();
-    let jacked_mean = mean(&jacked);
-    let bias_corrected_mean = sample_count as f64 * complete_mean - (sample_count - 1) as f64 * jacked_mean;
-    let error = jacked
+    let jacked_mean = mean(&jacked_evals);
+    let bias_corrected_mean =
+        sample_count as f64 * complete_eval - (sample_count - 1) as f64 * jacked_mean;
+    let error = jacked_evals
         .iter()
         .map(|value| (value - jacked_mean).powi(2))
         .sum::<f64>();
-    let error = (((sample_count - 1) as f64) * error / sample_count as f64).sqrt();
-    (bias_corrected_mean, error)
+    let stderr = (((sample_count - 1) as f64) * error / sample_count as f64).sqrt();
+    JackknifeEstimate {
+        mean: bias_corrected_mean,
+        stderr,
+        jacked_evals,
+    }
 }
 
 #[cfg(test)]
@@ -299,13 +287,13 @@ mod job_simulation_tests {
             .estimates_and_measurement_bins(2.0, 1.0)
             .expect("helicity estimates");
 
-        assert!(!observables.contains_key(HELICITY_COS_X));
-        assert!(!observables.contains_key(HELICITY_SIN2_X));
+        assert!(observables.contains_key(HELICITY_COS_X));
+        assert!(observables.contains_key(HELICITY_SIN2_X));
         assert!(!observables.contains_key("MagnetizationSquared"));
         assert!((observables["RhoXY"].mean - 0.5).abs() < 1e-12);
         assert!((observables["RhoZ"].mean - 0.0).abs() < 1e-12);
-        assert!((observables["RhoDifference"].mean - 0.5).abs() < 1e-12);
-        assert_eq!(measurement_bins["RhoXY"], vec![0.5]);
+        assert_eq!(measurement_bins[HELICITY_COS_X], vec![2.0]);
+        assert!(!measurement_bins.contains_key("RhoXY"));
     }
 
     #[test]
@@ -324,12 +312,72 @@ mod job_simulation_tests {
         assert!(observables.contains_key("EnergySquared"));
         assert!(observables.contains_key("MagnetizationSquared"));
         assert_eq!(measurement_bins["Energy"], vec![2.0, 6.0]);
-        assert_eq!(measurement_bins["Magnetization"], vec![0.37_f64.sqrt(), 0.905_f64.sqrt()]);
-        assert_eq!(measurement_bins["Chi"], vec![5.92, 14.48]);
-        assert_eq!(measurement_bins["SpecificHeat"], vec![32.0, 32.0]);
-        assert!((observables["Magnetization"].mean - ((0.37_f64.sqrt() + 0.905_f64.sqrt()) / 2.0)).abs() < 1e-12);
+        assert!(!measurement_bins.contains_key("Magnetization"));
+        assert!(!measurement_bins.contains_key("Chi"));
+        assert!(!measurement_bins.contains_key("SpecificHeat"));
+        assert!((observables["Magnetization"].mean - 0.817076375991209).abs() < 1e-12);
         assert!((observables["Chi"].mean - 10.2).abs() < 1e-12);
-        assert!((observables["SpecificHeat"].mean - 32.0).abs() < 1e-12);
+        assert!((observables["SpecificHeat"].mean - 288.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn evaluator_jackknifes_nonlinear_observables_from_rebin_means() {
+        let mut series = ObservableSeries::new(1);
+        let samples = (0..64)
+            .map(|index| if index < 32 { 2.0 } else { -1.0 })
+            .collect::<Vec<_>>();
+        for sin in samples {
+            series.push_helicity(&ThetaObservables {
+                energy: 0.0,
+                magnetization_squared: 0.0,
+                cos_x: 0.0,
+                cos_y: 0.0,
+                cos_z: 0.0,
+                sin_x: sin,
+                sin_y: sin,
+                sin_z: 0.0,
+            });
+        }
+
+        let (observables, _) = series
+            .estimates_and_measurement_bins(1.0, 1.0)
+            .expect("helicity estimates");
+
+        let sin_bins = BinnedEstimate::from_internal_bins(
+            series.accumulators[HELICITY_SIN_X].internal_bins().to_vec(),
+            1,
+        )
+        .unwrap();
+        let sin2_bins = BinnedEstimate::from_internal_bins(
+            series.accumulators[HELICITY_SIN2_X].internal_bins().to_vec(),
+            1,
+        )
+        .unwrap();
+        let sample_count = sin_bins.bins.len().min(sin2_bins.bins.len());
+        let sum_sin = sin_bins.bins[..sample_count].iter().sum::<f64>();
+        let sum_sin2 = sin2_bins.bins[..sample_count].iter().sum::<f64>();
+        let complete_eval = -(sum_sin2 / sample_count as f64
+            - (sum_sin / sample_count as f64).powi(2));
+        let jacked = (0..sample_count)
+            .map(|index| {
+                let mean_sin = (sum_sin - sin_bins.bins[index]) / (sample_count - 1) as f64;
+                let mean_sin2 = (sum_sin2 - sin2_bins.bins[index]) / (sample_count - 1) as f64;
+                -(mean_sin2 - mean_sin.powi(2))
+            })
+            .collect::<Vec<_>>();
+        let jacked_mean = mean(&jacked);
+        let expected = sample_count as f64 * complete_eval - (sample_count - 1) as f64 * jacked_mean;
+        let wrong_rebin_average = sin_bins
+            .bins
+            .iter()
+            .zip(&sin2_bins.bins)
+            .take(sample_count)
+            .map(|(sin, sin2)| -(sin2 - sin.powi(2)))
+            .sum::<f64>()
+            / sample_count as f64;
+
+        assert!((observables["RhoXY"].mean - expected).abs() < 1e-12);
+        assert!((observables["RhoXY"].mean - wrong_rebin_average).abs() > 1e-3);
     }
 }
 

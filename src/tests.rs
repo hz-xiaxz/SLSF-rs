@@ -808,7 +808,15 @@ fn theta_carlo_entrypoint_runs_task_and_roundtrips_result_json() {
     assert!(task_result.observables["MagnetizationSquared"]
         .mean
         .is_finite());
+    assert!(task_result.observables["_helicity_cos_x"].mean.is_finite());
+    assert!(task_result.observables["_helicity_sin2_x"].mean.is_finite());
     assert!(task_result.observables["Chi"].mean.is_finite());
+    assert!(task_result.measurement_bins.contains_key("_helicity_cos_x"));
+    assert!(task_result
+        .measurement_bins
+        .contains_key("_helicity_sin2_x"));
+    assert!(!task_result.measurement_bins.contains_key("RhoXY"));
+    assert!(!task_result.measurement_bins.contains_key("Chi"));
     assert!(task_result.observables["_ll_sweep_time"].mean.is_finite());
     assert!(task_result.observables["_ll_measure_time"].mean.is_finite());
     assert_eq!(task_result.observables["Energy"].bins, 2);
