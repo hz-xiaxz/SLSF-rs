@@ -31,7 +31,7 @@ PROFILE_EVENTS=${PROFILE_EVENTS:-cycles,instructions,branches,branch-misses,L1-d
 PERF_FREQ=${PERF_FREQ:-999}
 PERF_CALL_GRAPH=${PERF_CALL_GRAPH:-dwarf}
 BUILD_PROFILE=release
-if [ "$PROFILE" != "none" ]; then
+if [ "$PROFILE" = "stat" ] || [ "$PROFILE" = "record" ]; then
     BUILD_PROFILE=profiling
 fi
 BINARY=${BINARY:-$TARGET_DIR/$BUILD_PROFILE/slsf}
@@ -56,6 +56,9 @@ case "$PROFILE" in
     none)
         srun --wait=0 "$BINARY" mpi-run --config "$CONFIG" --restart
         ;;
+    benchmark)
+        srun --ntasks=1 "$BINARY" mpi-run --single --config "$CONFIG" --restart
+        ;;
     stat)
         srun --ntasks=1 perf stat -d -e "$PROFILE_EVENTS" -o "runs/perf-stat-${SLURM_JOB_ID}.txt" \
             "$BINARY" mpi-run --single --config "$CONFIG" --restart
@@ -67,7 +70,7 @@ case "$PROFILE" in
         perf report -i "runs/perf-${SLURM_JOB_ID}.data" --stdio > "runs/perf-${SLURM_JOB_ID}.report.txt"
         ;;
     *)
-        echo "unsupported PROFILE=$PROFILE; expected none, stat, or record" >&2
+        echo "unsupported PROFILE=$PROFILE; expected none, benchmark, stat, or record" >&2
         exit 2
         ;;
 esac
