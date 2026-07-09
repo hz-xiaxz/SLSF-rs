@@ -1,0 +1,26 @@
+name = "theta_l64_s1000_benchmark"
+output_dir = "runs/theta_l64_s1000_benchmark"
+checkpoint = false
+run_time = "01:00:00"
+checkpoint_time = "00:10:00"
+
+[model]
+L = [64]
+T = [2.2]
+samples = 1
+base_seed = 20260710
+j_xy = 1.5
+delta_j_xy = [0.5]
+j_z = 0.1
+delta_j_z = [0.0]
+
+[run]
+sweeps = 1000
+thermalization = 100
+binsize = 100
+proposal_width = 3.141592653589793
+wolff_steps = 1
+
+[measure]
+corr_rmax_xy = 0
+corr_rmax_z = 0

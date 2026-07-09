@@ -26,6 +26,7 @@ CARGO=${CARGO:-$HOME/.cargo/bin/cargo}
 RUST_TOOLCHAIN=${RUST_TOOLCHAIN:-nightly}
 RUSTFLAGS=${RUSTFLAGS:--C target-cpu=native}
 PROFILE=${PROFILE:-none}
+CARGO_FEATURES=${CARGO_FEATURES:-}
 PROFILE_EVENTS=${PROFILE_EVENTS:-cycles,instructions,branches,branch-misses,L1-dcache-loads,L1-dcache-load-misses,cache-misses}
 PERF_FREQ=${PERF_FREQ:-999}
 PERF_CALL_GRAPH=${PERF_CALL_GRAPH:-dwarf}
@@ -40,10 +41,15 @@ mkdir -p runs
 # Build on the allocated compute node before launching MPI so target-cpu=native
 # matches the CPU that will run the simulation, including AVX512 when available.
 # The sleef SIMD dependency requires nightly because it uses portable_simd.
-if [ "$BUILD_PROFILE" = "release" ]; then
-    RUSTFLAGS="$RUSTFLAGS" "$CARGO" +"$RUST_TOOLCHAIN" build --release --target-dir "$TARGET_DIR"
+if [ -n "$CARGO_FEATURES" ]; then
+    FEATURE_ARGS=(--features "$CARGO_FEATURES")
 else
-    RUSTFLAGS="$RUSTFLAGS" "$CARGO" +"$RUST_TOOLCHAIN" build --profile profiling --target-dir "$TARGET_DIR"
+    FEATURE_ARGS=()
+fi
+if [ "$BUILD_PROFILE" = "release" ]; then
+    RUSTFLAGS="$RUSTFLAGS" "$CARGO" +"$RUST_TOOLCHAIN" build --release --target-dir "$TARGET_DIR" "${FEATURE_ARGS[@]}"
+else
+    RUSTFLAGS="$RUSTFLAGS" "$CARGO" +"$RUST_TOOLCHAIN" build --profile profiling --target-dir "$TARGET_DIR" "${FEATURE_ARGS[@]}"
 fi
 
 case "$PROFILE" in
