@@ -1,0 +1,3 @@
+[submodule ".forge/sci-brain"]
+	path = .forge/sci-brain
+	url = https://github.com/QuantumBFS/sci-brain.git

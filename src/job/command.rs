@@ -51,6 +51,26 @@ fn run_theta_command(command: ThetaCommand) -> Result<String, String> {
                 summary.output_path.display()
             ))
         }
+        ThetaCommand::Check(args) => {
+            let (cfg, options) = load_config_and_options(&args)?;
+            let job = cfg.make_job()?;
+            let output_path = merged_result_path_with_options(&job.name, &options);
+            let lattice_count = cfg.lattice_specs().len();
+            Ok(format!(
+                "valid theta config: name={}; tasks={}; lattices={}; temperatures={}; samples={}; sweeps={}; thermalization={}; binsize={}; run_time={}s; checkpoint_time={}s; output={}",
+                job.name,
+                job.tasks.len(),
+                lattice_count,
+                cfg.temperatures.len(),
+                cfg.samples,
+                cfg.sweeps,
+                cfg.thermalization,
+                cfg.binsize,
+                cfg.run_time.as_secs(),
+                cfg.checkpoint_time.as_secs(),
+                output_path.display()
+            ))
+        }
         ThetaCommand::RunMerge(args) => {
             let (cfg, options) = load_config_and_options(&args)?;
             let run = run_theta_job_with_options(&cfg, options.clone())?;

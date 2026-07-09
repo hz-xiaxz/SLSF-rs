@@ -32,19 +32,28 @@ impl ThetaJobConfig {
     pub fn from_toml_path(path: impl AsRef<Path>) -> Result<(Self, ThetaRunOptions), String> {
         let text = fs::read_to_string(path.as_ref()).map_err(|err| err.to_string())?;
         let spec = toml::from_str::<ThetaJobToml>(&text).map_err(|err| err.to_string())?;
-        Ok(Self::from_toml_spec(spec))
+        Self::try_from_toml_spec(spec)
     }
 
     pub fn from_toml_spec(spec: ThetaJobToml) -> (Self, ThetaRunOptions) {
+        Self::try_from_toml_spec(spec)
+            .expect("ThetaJobToml contains an invalid duration")
+    }
+
+    pub fn try_from_toml_spec(
+        spec: ThetaJobToml,
+    ) -> Result<(Self, ThetaRunOptions), String> {
         let mut cfg = Self::default();
         if let Some(name) = spec.name {
             cfg.job_name = name;
         }
         if let Some(run_time) = spec.run_time {
-            cfg.run_time = parse_duration(&run_time).unwrap_or(cfg.run_time);
+            cfg.run_time = parse_duration(&run_time)
+                .map_err(|err| format!("invalid run_time: {err}"))?;
         }
         if let Some(checkpoint_time) = spec.checkpoint_time {
-            cfg.checkpoint_time = parse_duration(&checkpoint_time).unwrap_or(cfg.checkpoint_time);
+            cfg.checkpoint_time = parse_duration(&checkpoint_time)
+                .map_err(|err| format!("invalid checkpoint_time: {err}"))?;
         }
         if let Some(model) = spec.model {
             if let Some(value) = model.l {
@@ -110,7 +119,7 @@ impl ThetaJobConfig {
             checkpoint: spec.checkpoint.unwrap_or(false),
             ..Default::default()
         };
-        (cfg, options)
+        Ok((cfg, options))
     }
 
     pub fn from_env() -> Result<Self, String> {
@@ -157,6 +166,15 @@ impl ThetaJobConfig {
     }
 
     pub fn make_job(&self) -> Result<ThetaJob, String> {
+        if self.lattice_specs().is_empty() {
+            return Err("at least one lattice size must be configured".to_string());
+        }
+        if self.temperatures.is_empty() {
+            return Err("at least one temperature must be configured".to_string());
+        }
+        if self.delta_j_xy.is_empty() || self.delta_j_z.is_empty() {
+            return Err("delta_j_xy and delta_j_z must not be empty".to_string());
+        }
         if self.samples == 0 {
             return Err("samples must be positive".to_string());
         }

@@ -70,6 +70,7 @@ pub enum ThetaCommand {
     Run(CommandArgs),
     #[command(alias = "m")]
     Merge(CommandArgs),
+    Check(CommandArgs),
     RunMerge(CommandArgs),
     RunDynamic(CommandArgs),
     MpiRun(CommandArgs),

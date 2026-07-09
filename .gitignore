@@ -17,6 +17,8 @@ node_modules
 logs/
 results/
 runs/
+.forge/slurm-runs/
+.forge/slsf-current-job-id
 *.out
 *.log
 *.h5

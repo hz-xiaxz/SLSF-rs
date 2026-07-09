@@ -472,6 +472,13 @@ fn theta_carlo_entrypoint_job_config_and_binning() {
         ..Default::default()
     });
     assert_eq!(toml_measure_cfg.correlation_interval, 3);
+
+    let invalid_duration = ThetaJobConfig::try_from_toml_spec(ThetaJobToml {
+        run_time: Some("48:invalid:00".to_string()),
+        ..Default::default()
+    })
+    .unwrap_err();
+    assert!(invalid_duration.contains("invalid run_time"));
 }
 
 #[test]
@@ -1131,6 +1138,18 @@ corr_rmax = 0
         mpi_out.to_string_lossy()
     );
     fs::write(&mpi_config_path, mpi_config).unwrap();
+
+    let check_message = run_theta_job_command([
+        "slsf",
+        "check",
+        "--config",
+        mpi_config_path.to_str().unwrap(),
+    ])
+    .unwrap();
+    assert!(check_message.contains("valid theta config"));
+    assert!(check_message.contains("tasks=2"));
+    assert!(check_message.contains("temperatures=2"));
+    assert!(check_message.contains("output="));
 
     let mpi_rank0 = run_theta_job_command([
         "slsf",
