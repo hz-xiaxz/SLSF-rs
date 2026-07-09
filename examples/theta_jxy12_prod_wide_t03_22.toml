@@ -1,0 +1,30 @@
+name = "theta_jxy12_prod_wide_t03_22"
+output_dir = "runs/theta_jxy12_prod_wide_t03_22"
+checkpoint = true
+run_time = "48:00:00"
+checkpoint_time = "00:30:00"
+
+[model]
+# Wide temperature grid for checking rhoXY/rhoZ behavior after jackknife fix.
+L = [4, 6, 8, 10]
+T = [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, 2.1, 2.2]
+samples = 20
+base_seed = 20260627
+
+# Two-point layer disorder: each layer has Jx(z) = Jy(z) = Jxy(z) in {1, 2}.
+# This is mean +/- delta = 1.5 +/- 0.5.
+j_xy = 1.5
+delta_j_xy = [0.5]
+j_z = 0.1
+delta_j_z = [0.0]
+
+[run]
+sweeps = 1000000
+thermalization = 100000
+binsize = 1000
+proposal_width = 3.141592653589793
+wolff_steps = 1
+
+[measure]
+corr_rmax_xy = 0
+corr_rmax_z = 0
