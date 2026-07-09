@@ -29,6 +29,34 @@ fn fast_math_x8_matches_scalar_regression() {
 }
 
 #[test]
+fn metropolis_batch_acceptance_probabilities_match_scalar() {
+    let delta = [-2.0, 0.0, 0.125, 0.5, 1.0, 1.5, 2.0, 3.0];
+    let beta = 0.75;
+    let probability =
+        crate::updates::metropolis_accept_probabilities(delta, beta, crate::fast_math::exp_x8);
+
+    for (lane, &energy_delta) in delta.iter().enumerate() {
+        let expected = if energy_delta <= 0.0 {
+            1.0
+        } else {
+            (-energy_delta * beta).exp()
+        };
+        assert_abs_diff_eq!(probability[lane], expected, epsilon = 1e-14);
+    }
+
+    #[cfg(feature = "mixed-vector-exp")]
+    {
+        assert_eq!(crate::updates::vector_exp_min_uphill::<4>(), 2);
+        assert_eq!(crate::updates::vector_exp_min_uphill::<8>(), 3);
+    }
+    #[cfg(not(feature = "mixed-vector-exp"))]
+    {
+        assert_eq!(crate::updates::vector_exp_min_uphill::<4>(), 4);
+        assert_eq!(crate::updates::vector_exp_min_uphill::<8>(), 8);
+    }
+}
+
+#[test]
 fn theta_lattice_initialization_and_disorder() {
     assert!(ThetaLattice::new(0, 2, 2).is_err());
     assert!(ThetaLattice::new(2, 0, 2).is_err());

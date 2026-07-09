@@ -7,6 +7,57 @@ use crate::types::{
 
 type Site = (usize, usize, usize);
 type SinCosBatch<const LANES: usize> = fn([f64; LANES]) -> ([f64; LANES], [f64; LANES]);
+type ExpBatch<const LANES: usize> = fn([f64; LANES]) -> [f64; LANES];
+
+#[inline]
+pub(crate) const fn vector_exp_min_uphill<const LANES: usize>() -> usize {
+    #[cfg(feature = "mixed-vector-exp")]
+    {
+        match LANES {
+            4 => 2,
+            8 => 3,
+            _ => LANES,
+        }
+    }
+    #[cfg(not(feature = "mixed-vector-exp"))]
+    {
+        LANES
+    }
+}
+
+#[inline]
+pub(crate) fn metropolis_accept_probabilities<const LANES: usize>(
+    delta_energy: [f64; LANES],
+    beta: f64,
+    exp_batch: ExpBatch<LANES>,
+) -> [f64; LANES] {
+    let mut exp_arg = [0.0; LANES];
+    let mut uphill_lane = [usize::MAX; LANES];
+    let mut uphill_count = 0usize;
+    for (lane, &delta) in delta_energy.iter().enumerate() {
+        if delta > 0.0 {
+            exp_arg[uphill_count] = -delta * beta;
+            uphill_lane[uphill_count] = lane;
+            uphill_count += 1;
+        }
+    }
+
+    #[cfg(feature = "profile-stats")]
+    record_batch_uphill::<LANES>(uphill_count);
+
+    let mut accept_prob = [1.0; LANES];
+    if uphill_count >= vector_exp_min_uphill::<LANES>() {
+        let packed_prob = exp_batch(exp_arg);
+        for uphill_idx in 0..uphill_count {
+            accept_prob[uphill_lane[uphill_idx]] = packed_prob[uphill_idx];
+        }
+    } else {
+        for uphill_idx in 0..uphill_count {
+            accept_prob[uphill_lane[uphill_idx]] = crate::fast_math::exp(exp_arg[uphill_idx]);
+        }
+    }
+    accept_prob
+}
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct UpdateProfileStats {
@@ -265,7 +316,7 @@ fn local_metropolis_step_x_batch<const LANES: usize, R: Rng + ?Sized>(
     z: usize,
     rng: &mut R,
     sin_cos_batch: SinCosBatch<LANES>,
-    exp_batch: fn([f64; LANES]) -> [f64; LANES],
+    exp_batch: ExpBatch<LANES>,
 ) -> usize {
     let mut idxs = [0usize; LANES];
     let mut theta_new = [0.0; LANES];
@@ -293,31 +344,12 @@ fn local_metropolis_step_x_batch<const LANES: usize, R: Rng + ?Sized>(
 
     let (new_sin, new_cos) = sin_cos_batch(theta_new);
     let mut delta_energy = [0.0; LANES];
-    let mut exp_arg = [0.0; LANES];
-    let mut uphill_lane = [usize::MAX; LANES];
-    let mut uphill_count = 0usize;
     for lane in 0..LANES {
         delta_energy[lane] =
             local_theta_energy_from_trig(new_sin[lane], new_cos[lane], hx[lane], hy[lane])
                 - old_energy[lane];
-        if delta_energy[lane] > 0.0 {
-            exp_arg[uphill_count] = -delta_energy[lane] * beta;
-            uphill_lane[uphill_count] = lane;
-            uphill_count += 1;
-        }
     }
-
-    let mut accept_prob = [1.0; LANES];
-    #[cfg(feature = "profile-stats")]
-    record_batch_uphill::<LANES>(uphill_count);
-    if uphill_count == LANES {
-        accept_prob = exp_batch(exp_arg);
-    } else {
-        for uphill_idx in 0..uphill_count {
-            let lane = uphill_lane[uphill_idx];
-            accept_prob[lane] = crate::fast_math::exp(exp_arg[uphill_idx]);
-        }
-    }
+    let accept_prob = metropolis_accept_probabilities(delta_energy, beta, exp_batch);
 
     let mut accepted = 0usize;
     for lane in 0..LANES {
