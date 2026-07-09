@@ -44,16 +44,8 @@ fn metropolis_batch_acceptance_probabilities_match_scalar() {
         assert_abs_diff_eq!(probability[lane], expected, epsilon = 1e-14);
     }
 
-    #[cfg(feature = "mixed-vector-exp")]
-    {
-        assert_eq!(crate::updates::vector_exp_min_uphill::<4>(), 2);
-        assert_eq!(crate::updates::vector_exp_min_uphill::<8>(), 3);
-    }
-    #[cfg(not(feature = "mixed-vector-exp"))]
-    {
-        assert_eq!(crate::updates::vector_exp_min_uphill::<4>(), 4);
-        assert_eq!(crate::updates::vector_exp_min_uphill::<8>(), 8);
-    }
+    assert_eq!(crate::updates::vector_exp_min_uphill::<4>(), 2);
+    assert_eq!(crate::updates::vector_exp_min_uphill::<8>(), 3);
 }
 
 #[test]

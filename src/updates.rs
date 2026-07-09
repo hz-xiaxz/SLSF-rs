@@ -11,17 +11,10 @@ type ExpBatch<const LANES: usize> = fn([f64; LANES]) -> [f64; LANES];
 
 #[inline]
 pub(crate) const fn vector_exp_min_uphill<const LANES: usize>() -> usize {
-    #[cfg(feature = "mixed-vector-exp")]
-    {
-        match LANES {
-            4 => 2,
-            8 => 3,
-            _ => LANES,
-        }
-    }
-    #[cfg(not(feature = "mixed-vector-exp"))]
-    {
-        LANES
+    match LANES {
+        4 => 2,
+        8 => 3,
+        _ => LANES,
     }
 }
 

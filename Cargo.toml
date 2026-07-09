@@ -8,7 +8,6 @@ license = "MIT"
 [features]
 default = []
 profile-stats = []
-mixed-vector-exp = []
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
