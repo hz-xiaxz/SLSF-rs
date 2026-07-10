@@ -9,7 +9,7 @@ cd "$ROOT"
 
 SSH_TARGET=${SLSF_SSH_TARGET:-m9s004715@BSCC-M9@ssh.cn-hongkong-1.paracloud.com}
 SSH_PORT=${SLSF_SSH_PORT:-22}
-REMOTE_ROOT=${SLSF_REMOTE_ROOT:-/public1/home/m9s004715/SLSF-rs}
+REMOTE_ROOT=${SLSF_REMOTE_ROOT:-/publicfs10/fs10-m9/home/m9s004715/SLSF-rs}
 SLURM_SCRIPT=${SLSF_SLURM_SCRIPT:-examples/run_theta_small_amd512.slurm}
 STATE_DIR=${SLSF_STATE_DIR:-.forge/slurm-runs}
 CURRENT_RECORD="$STATE_DIR/current.json"
@@ -248,6 +248,20 @@ case "$cmd" in
             exit 2
         fi
         cargo +nightly run --quiet -- check --config "$config"
+        job_name=$(python3 - "$config" <<'PY'
+import pathlib, sys, tomllib
+with open(sys.argv[1], "rb") as handle:
+    spec = tomllib.load(handle)
+print(spec.get("name") or pathlib.Path(sys.argv[1]).stem)
+PY
+)
+        [[ "$job_name" =~ ^[A-Za-z0-9._-]+$ ]] || {
+            echo "config job name contains unsupported characters: $job_name" >&2
+            exit 2
+        }
+        case "$job_name" in
+            bash|sh|slsf|test|job) echo "config job name is too generic: $job_name" >&2; exit 2 ;;
+        esac
         sync_output=$(sync_source "$source")
         printf '%s\n' "$sync_output"
         revision=
@@ -260,7 +274,7 @@ case "$cmd" in
                 manifest) manifest=$value ;;
             esac
         done <<< "$sync_output"
-        submit_output=$(remote "cd $(quote "$REMOTE_ROOT") && sbatch --export=ALL,CONFIG=$(quote "$config") $(quote "$SLURM_SCRIPT")")
+        submit_output=$(remote "cd $(quote "$REMOTE_ROOT") && sbatch --job-name=$(quote "$job_name") --export=ALL,CONFIG=$(quote "$config") $(quote "$SLURM_SCRIPT")")
         printf '%s\n' "$submit_output"
         job_id=$(python3 - "$submit_output" <<'PY'
 import re, sys
