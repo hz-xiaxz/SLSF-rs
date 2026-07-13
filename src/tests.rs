@@ -1072,25 +1072,48 @@ fn theta_carlo_entrypoint_runs_task_and_roundtrips_result_json() {
         vec!["2".to_string()]
     );
     let checkpoint_measurements = checkpoint.group("measurements").unwrap();
-    for name in checkpoint_measurements.groups().unwrap() {
-        let observable_group = checkpoint_measurements.group(&name).unwrap();
+    assert_eq!(
+        sorted_strings(checkpoint_measurements.datasets().unwrap()),
+        vec!["default_bin_size".to_string()]
+    );
+    assert_eq!(
+        checkpoint_measurements
+            .dataset("default_bin_size")
+            .unwrap()
+            .read_i64()
+            .unwrap(),
+        vec![result.tasks[0].task.binsize as i64]
+    );
+    assert_eq!(
+        sorted_strings(checkpoint_measurements.groups().unwrap()),
+        vec!["observables".to_string()]
+    );
+    let checkpoint_dump_observables = checkpoint.group("measurements/observables").unwrap();
+    for name in checkpoint_dump_observables.groups().unwrap() {
+        let observable_group = checkpoint_dump_observables.group(&name).unwrap();
         assert_eq!(
             sorted_strings(observable_group.datasets().unwrap()),
             vec![
                 "bin_length".to_string(),
-                "internal_bins".to_string(),
-                "pending_count".to_string(),
-                "pending_sum".to_string(),
-                "total_count".to_string()
+                "current_bin_filling".to_string(),
+                "samples".to_string()
             ]
         );
         assert_eq!(
             observable_group
-                .dataset("internal_bins")
+                .dataset("current_bin_filling")
+                .unwrap()
+                .read_i64()
+                .unwrap(),
+            vec![0]
+        );
+        assert_eq!(
+            observable_group
+                .dataset("samples")
                 .unwrap()
                 .read_f64()
                 .unwrap(),
-            Vec::<f64>::new()
+            vec![0.0]
         );
     }
     let checkpoint_measurement_path = checkpoint_paths[0].with_file_name("run0001.meas.h5");

@@ -170,32 +170,30 @@ fn write_theta_checkpoint_state_to_path(
     builder.add_group(progress_group.finish());
 
     let mut measurements_group = builder.create_group("measurements");
+    measurements_group
+        .create_dataset("default_bin_size")
+        .with_i64_data(&[state.task.binsize as i64])
+        .with_shape(&[]);
+    let mut measurement_observables_group = measurements_group.create_group("observables");
     for (name, accumulator) in &state.measurement_accumulators {
-        let mut observable_group = measurements_group.create_group(name);
-        observable_group
-            .create_dataset("internal_bins")
-            .with_f64_data(&[])
-            .with_shape(&[0])
-            .with_maxshape(&[u64::MAX])
-            .with_chunks(&[1000]);
-        observable_group
-            .create_dataset("pending_sum")
-            .with_f64_data(&[accumulator.pending_sum])
-            .with_shape(&[]);
-        observable_group
-            .create_dataset("pending_count")
-            .with_i64_data(&[accumulator.pending_count as i64])
-            .with_shape(&[]);
-        observable_group
-            .create_dataset("total_count")
-            .with_i64_data(&[accumulator.total_count as i64])
-            .with_shape(&[]);
+        let mut observable_group = measurement_observables_group.create_group(name);
         observable_group
             .create_dataset("bin_length")
             .with_i64_data(&[accumulator.internal_bin_length as i64])
             .with_shape(&[]);
-        measurements_group.add_group(observable_group.finish());
+        observable_group
+            .create_dataset("current_bin_filling")
+            .with_i64_data(&[accumulator.pending_count as i64])
+            .with_shape(&[]);
+        observable_group
+            .create_dataset("samples")
+            .with_f64_data(&[accumulator.pending_sum])
+            .with_shape(&[1])
+            .with_maxshape(&[u64::MAX])
+            .with_chunks(&[1000]);
+        measurement_observables_group.add_group(observable_group.finish());
     }
+    measurements_group.add_group(measurement_observables_group.finish());
     builder.add_group(measurements_group.finish());
 
     let mut metadata_group = builder.create_group("metadata");
@@ -461,10 +459,19 @@ fn read_measurement_accumulators(
     let Ok(measurements_group) = file.group("measurements") else {
         return Ok(accumulators);
     };
-    for name in measurements_group.groups().map_err(|err| err.to_string())? {
-        let observable_group = measurements_group
-            .group(&name)
-            .map_err(|err| err.to_string())?;
+    let observable_names = if let Ok(observables_group) = measurements_group.group("observables") {
+        observables_group.groups().map_err(|err| err.to_string())?
+    } else {
+        measurements_group.groups().map_err(|err| err.to_string())?
+    };
+    for name in observable_names {
+        let observable_group = if let Ok(observables_group) = measurements_group.group("observables") {
+            observables_group.group(&name).map_err(|err| err.to_string())?
+        } else {
+            measurements_group
+                .group(&name)
+                .map_err(|err| err.to_string())?
+        };
         let internal_bin_length = read_optional_scalar_i64(&observable_group, "bin_length")?
             .map(|value| value as usize)
             .unwrap_or(fallback_bin_length.max(1));
@@ -472,11 +479,24 @@ fn read_measurement_accumulators(
             .remove(&name)
             .map(|accumulator| accumulator.internal_bins)
             .unwrap_or_default();
+        let carlo_current_bin = observable_group
+            .dataset("current_bin_filling")
+            .is_ok()
+            .then(|| {
+                let samples = observable_group
+                    .dataset("samples")
+                    .map_err(|err| err.to_string())?
+                    .read_f64()
+                    .map_err(|err| err.to_string())?;
+                let filling = read_scalar_i64(&observable_group, "current_bin_filling")? as usize;
+                Ok::<_, String>((samples.into_iter().next().unwrap_or(0.0), filling))
+            })
+            .transpose()?;
         match observable_group.dataset("internal_bins") {
             Ok(dataset) => {
                 internal_bins.extend(dataset.read_f64().map_err(|err| err.to_string())?);
             }
-            Err(_) => {
+            Err(_) if carlo_current_bin.is_none() => {
                 if let Ok(dataset) = observable_group.dataset("samples") {
                     internal_bins.extend(
                         ScalarAccumulator::from_samples(
@@ -488,11 +508,20 @@ fn read_measurement_accumulators(
                     );
                 }
             }
+            Err(_) => {}
         }
-        let pending_sum = read_optional_scalar_f64(&observable_group, "pending_sum")?.unwrap_or(0.0);
-        let pending_count = read_optional_scalar_i64(&observable_group, "pending_count")?
-            .map(|value| value as usize)
-            .unwrap_or(0);
+        let pending_sum = if let Some((sum, _)) = carlo_current_bin {
+            sum
+        } else {
+            read_optional_scalar_f64(&observable_group, "pending_sum")?.unwrap_or(0.0)
+        };
+        let pending_count = if let Some((_, count)) = carlo_current_bin {
+            count
+        } else {
+            read_optional_scalar_i64(&observable_group, "pending_count")?
+                .map(|value| value as usize)
+                .unwrap_or(0)
+        };
         let total_count = read_optional_scalar_i64(&observable_group, "total_count")?
             .map(|value| value as usize)
             .unwrap_or(internal_bins.len() * internal_bin_length + pending_count);
