@@ -805,6 +805,77 @@ correlation_interval = 2
 }
 
 #[test]
+fn theta_deadline_before_measurement_does_not_mark_task_done() {
+    let root = std::env::temp_dir().join(format!(
+        "slsf_theta_deadline_no_done_test_{}",
+        std::process::id()
+    ));
+    let output_dir = root.join("out");
+    fs::create_dir_all(&root).unwrap();
+    let config_path = root.join("theta.toml");
+    let config = format!(
+        r#"
+name = "deadline_unit"
+output_dir = {:?}
+checkpoint = true
+run_time = "00:00:00"
+checkpoint_time = "00:00:00"
+
+[model]
+L = [2]
+T = [1.0]
+delta_j_z = [0.0]
+samples = 1
+base_seed = 47
+j_xy = 1.0
+j_z_mean = 1.0
+
+[run]
+sweeps = 4
+thermalization = 1
+binsize = 2
+proposal_width = 0.0
+wolff_steps = 0
+
+[measure]
+corr_rmax = 0
+"#,
+        output_dir.to_string_lossy()
+    );
+    fs::write(&config_path, config).unwrap();
+
+    let message = run_theta_job_command([
+        "slsf",
+        "run-dynamic",
+        "--config",
+        config_path.to_str().unwrap(),
+    ])
+    .unwrap();
+    assert!(message.contains("dynamically completed 0 theta task(s)"));
+    assert!(output_dir.join("deadline_unit.rank0.results.json").exists());
+    assert!(output_dir
+        .join("deadline_unit.data/task0001/run0001.dump.h5")
+        .exists());
+    assert!(!output_dir
+        .join("deadline_unit.data/task0001/run0001.meas.h5")
+        .exists());
+    assert!(!output_dir
+        .join("deadline_unit.data/scheduler/task0000.done")
+        .exists());
+    assert!(!output_dir
+        .join("deadline_unit.data/scheduler/task0000.claim")
+        .exists());
+
+    let status =
+        run_theta_job_command(["slsf", "status", "--config", config_path.to_str().unwrap()])
+            .unwrap();
+    assert!(status.contains("0 of 1 theta task(s) marked done"));
+    assert!(status.contains("1 pending"));
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn theta_carlo_entrypoint_runs_task_and_roundtrips_result_json() {
     let task = ThetaTask {
         name: "tiny".to_string(),
@@ -1018,11 +1089,27 @@ fn theta_carlo_entrypoint_runs_task_and_roundtrips_result_json() {
                 .dataset("internal_bins")
                 .unwrap()
                 .read_f64()
-                .unwrap()
-                .len(),
-            result.tasks[0].measurement_bins[&name].len()
+                .unwrap(),
+            Vec::<f64>::new()
         );
     }
+    let checkpoint_measurement_path = checkpoint_paths[0].with_file_name("run0001.meas.h5");
+    let checkpoint_measurement =
+        hdf5_pure::File::from_bytes(std::fs::read(&checkpoint_measurement_path).unwrap()).unwrap();
+    let checkpoint_observables = checkpoint_measurement.group("observables").unwrap();
+    for (name, samples) in &result.tasks[0].measurement_bins {
+        assert_eq!(
+            checkpoint_observables
+                .group(name)
+                .unwrap()
+                .dataset("samples")
+                .unwrap()
+                .read_f64()
+                .unwrap(),
+            *samples
+        );
+    }
+
     let simulation_group = checkpoint
         .group("contexts/rank0000/simulation")
         .expect("checkpoint simulation group");
@@ -1149,7 +1236,7 @@ fn theta_carlo_entrypoint_runs_task_and_roundtrips_result_json() {
         r#"
 name = "mpi_unit"
 output_dir = {:?}
-run_time = "00:01"
+run_time = "01:00"
 checkpoint_time = "00:01"
 
 [model]

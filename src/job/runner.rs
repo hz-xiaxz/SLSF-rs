@@ -96,6 +96,18 @@ fn try_claim_task(
     }
 }
 
+fn release_task_claim(scheduler_dir: &Path, task_index: usize, claim_path: &Path) -> Result<(), String> {
+    remove_path_if_exists(&heartbeat_path_for_task(scheduler_dir, task_index))?;
+    match fs::remove_file(claim_path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(format!(
+            "failed to remove claim {} for task {task_index}: {err}",
+            claim_path.display()
+        )),
+    }
+}
+
 fn mark_task_done(scheduler_dir: &Path, task_index: usize, claim_path: &Path) -> Result<(), String> {
     let done_path = task_marker_path(scheduler_dir, task_index, "done");
     let tmp_done_path = scheduler_dir.join(format!(
@@ -111,15 +123,12 @@ fn mark_task_done(scheduler_dir: &Path, task_index: usize, claim_path: &Path) ->
         done.sync_all().map_err(|err| err.to_string())?;
     }
     fs::rename(&tmp_done_path, &done_path).map_err(|err| err.to_string())?;
-    remove_path_if_exists(&heartbeat_path_for_task(scheduler_dir, task_index))?;
-    match fs::remove_file(claim_path) {
-        Ok(()) => Ok(()),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(err) => Err(format!(
-            "failed to remove claim {} after completing task {task_index}: {err}",
-            claim_path.display()
-        )),
-    }
+    release_task_claim(scheduler_dir, task_index, claim_path)
+}
+
+fn theta_task_completed(task_result: &ThetaTaskResult) -> bool {
+    task_result.thermalization_sweeps >= task_result.task.thermalization
+        && task_result.measurement_sweeps >= task_result.task.sweeps
 }
 
 fn dynamic_task_order(
@@ -368,20 +377,23 @@ pub fn run_theta_job_with_options(
         .unwrap_or_else(|| rank_result_path_with_options(&job.name, assignment.rank, &options));
 
     let started = Instant::now();
-    let tasks = job
-        .selected_tasks(assignment)
-        .map(|(task_index, task)| {
-            let checkpoint = checkpoint_runtime_for_task(
-                &job.name,
-                &options,
-                cfg.run_time,
-                cfg.checkpoint_time,
-                started,
-                task_index,
-            );
-            run_theta_task_with_checkpoint(task, task_index, checkpoint.as_ref())
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    let mut tasks = Vec::new();
+    for (task_index, task) in job.selected_tasks(assignment) {
+        let checkpoint = checkpoint_runtime_for_task(
+            &job.name,
+            &options,
+            cfg.run_time,
+            cfg.checkpoint_time,
+            started,
+            task_index,
+        );
+        let task_result = run_theta_task_with_checkpoint(task, task_index, checkpoint.as_ref())?;
+        if !theta_task_completed(&task_result) {
+            break;
+        }
+        tasks.push(task_result);
+    }
+
     let result = ThetaJobResult {
         job_name: job.name.clone(),
         rank: assignment.rank,
@@ -426,6 +438,10 @@ pub fn run_theta_job_dynamic_with_options(
             checkpoint.heartbeat_path = Some(heartbeat_path_for_task(&scheduler_dir, task_index));
         }
         let task_result = run_theta_task_with_checkpoint(task, task_index, checkpoint.as_ref())?;
+        if !theta_task_completed(&task_result) {
+            release_task_claim(&scheduler_dir, task_index, &claim_path)?;
+            break;
+        }
         mark_task_done(&scheduler_dir, task_index, &claim_path)?;
         tasks.push(task_result);
     }

@@ -633,6 +633,27 @@ pub(crate) fn run_theta_task_with_checkpoint(
         write_theta_checkpoint_state_to_path(&state, &checkpoint.path)?;
     }
 
+    let completed = completed_thermalization_sweeps >= task.thermalization
+        && completed_measurement_sweeps >= task.sweeps;
+    if !completed {
+        return Ok(ThetaTaskResult {
+            task: task.clone(),
+            task_index,
+            observables: BTreeMap::new(),
+            acceptance: acceptance_sum / acceptance_count.max(1) as f64,
+            measurements: completed_measurement_sweeps,
+            measurement_bins: BTreeMap::new(),
+            measurement_samples: BTreeMap::new(),
+            final_theta: lattice.theta.clone(),
+            final_j_z: lattice.j_z.clone(),
+            rng_word_pos: rng.position(),
+            thermalization_sweeps: completed_thermalization_sweeps,
+            measurement_sweeps: completed_measurement_sweeps,
+            acceptance_sum,
+            acceptance_count,
+        });
+    }
+
     let (observables, measurement_bins) = series.estimates_and_measurement_bins(volume, beta)?;
 
     #[cfg(feature = "profile-stats")]
