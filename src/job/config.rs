@@ -103,8 +103,12 @@ impl ThetaJobConfig {
         }
         if let Some(measure) = spec.measure {
             cfg.correlation_rmax = measure.corr_rmax;
-            cfg.correlation_rmax_xy = measure.corr_rmax_xy.or(cfg.correlation_rmax);
-            cfg.correlation_rmax_z = measure.corr_rmax_z.or(cfg.correlation_rmax);
+            cfg.correlation_rmax_xy = measure
+                .corr_rmax_xy
+                .or_else(|| cfg.correlation_rmax.clone());
+            cfg.correlation_rmax_z = measure
+                .corr_rmax_z
+                .or_else(|| cfg.correlation_rmax.clone());
             if let Some(value) = measure.correlation_interval.or(measure.corr_interval) {
                 cfg.correlation_interval = value;
             }
@@ -142,11 +146,11 @@ impl ThetaJobConfig {
         cfg.wolff_steps = parse_env_value("XY_WOLFF_STEPS", cfg.wolff_steps)?;
         cfg.run_time = parse_env_duration("XY_RUN_TIME", cfg.run_time)?;
         cfg.checkpoint_time = parse_env_duration("XY_CHECKPOINT_TIME", cfg.checkpoint_time)?;
-        cfg.correlation_rmax = parse_optional_env_value("XY_CORR_RMAX")?;
+        cfg.correlation_rmax = parse_optional_env_list("XY_CORR_RMAX")?;
         cfg.correlation_rmax_xy =
-            parse_optional_env_value("XY_CORR_RMAX_XY")?.or(cfg.correlation_rmax);
+            parse_optional_env_list("XY_CORR_RMAX_XY")?.or_else(|| cfg.correlation_rmax.clone());
         cfg.correlation_rmax_z =
-            parse_optional_env_value("XY_CORR_RMAX_Z")?.or(cfg.correlation_rmax);
+            parse_optional_env_list("XY_CORR_RMAX_Z")?.or_else(|| cfg.correlation_rmax.clone());
         cfg.correlation_interval = parse_env_value("XY_CORR_INTERVAL", cfg.correlation_interval)?;
         cfg.job_name = std::env::var("XY_JOB_NAME").unwrap_or_else(|_| {
             format!(
@@ -166,9 +170,25 @@ impl ThetaJobConfig {
     }
 
     pub fn make_job(&self) -> Result<ThetaJob, String> {
-        if self.lattice_specs().is_empty() {
+        let lattice_specs = self.lattice_specs();
+        if lattice_specs.is_empty() {
             return Err("at least one lattice size must be configured".to_string());
         }
+        validate_correlation_rmax_count(
+            "corr_rmax",
+            self.correlation_rmax.as_deref(),
+            lattice_specs.len(),
+        )?;
+        validate_correlation_rmax_count(
+            "corr_rmax_xy",
+            self.correlation_rmax_xy.as_deref(),
+            lattice_specs.len(),
+        )?;
+        validate_correlation_rmax_count(
+            "corr_rmax_z",
+            self.correlation_rmax_z.as_deref(),
+            lattice_specs.len(),
+        )?;
         if self.temperatures.is_empty() {
             return Err("at least one temperature must be configured".to_string());
         }
@@ -188,7 +208,7 @@ impl ThetaJobConfig {
             return Err("sweeps must be at least binsize".to_string());
         }
         let mut tasks = Vec::new();
-        for (l_x, l_y, l_z, l) in self.lattice_specs() {
+        for (lattice_index, &(l_x, l_y, l_z, l)) in lattice_specs.iter().enumerate() {
             for &delta_j_xy in &self.delta_j_xy {
                 for &delta_j_z in &self.delta_j_z {
                     for &temperature in &self.temperatures {
@@ -237,11 +257,21 @@ impl ThetaJobConfig {
                                 binsize: self.binsize,
                                 proposal_width: self.proposal_width,
                                 wolff_steps: self.wolff_steps,
-                                correlation_rmax: self.correlation_rmax.unwrap_or(l_z / 2),
+                                correlation_rmax: self
+                                    .correlation_rmax
+                                    .as_ref()
+                                    .map(|values| values[lattice_index])
+                                    .unwrap_or(l_z / 2),
                                 correlation_rmax_xy: self
                                     .correlation_rmax_xy
+                                    .as_ref()
+                                    .map(|values| values[lattice_index])
                                     .unwrap_or_else(|| l_x.min(l_y) / 2),
-                                correlation_rmax_z: self.correlation_rmax_z.unwrap_or(l_z / 2),
+                                correlation_rmax_z: self
+                                    .correlation_rmax_z
+                                    .as_ref()
+                                    .map(|values| values[lattice_index])
+                                    .unwrap_or(l_z / 2),
                                 correlation_interval: self.correlation_interval,
                                 j_xy_array: Some(j_xy_array),
                                 j_z_array: Some(j_z_array),
@@ -274,4 +304,20 @@ impl ThetaJobConfig {
         }
         specs
     }
+}
+
+fn validate_correlation_rmax_count(
+    name: &str,
+    values: Option<&[usize]>,
+    lattice_count: usize,
+) -> Result<(), String> {
+    if let Some(values) = values {
+        if values.len() != lattice_count {
+            return Err(format!(
+                "{name} must contain exactly one value per lattice size: expected {lattice_count}, got {}",
+                values.len()
+            ));
+        }
+    }
+    Ok(())
 }

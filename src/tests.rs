@@ -441,7 +441,7 @@ fn theta_carlo_entrypoint_job_config_and_binning() {
         thermalization: 1,
         binsize: 2,
         wolff_steps: 0,
-        correlation_rmax: Some(0),
+        correlation_rmax: Some(vec![0]),
         correlation_interval: 2,
         job_name: "unit_theta_job".to_string(),
         ..Default::default()
@@ -500,12 +500,48 @@ fn theta_carlo_entrypoint_job_config_and_binning() {
 
     let (toml_measure_cfg, _) = ThetaJobConfig::from_toml_spec(ThetaJobToml {
         measure: Some(ThetaMeasureToml {
+            corr_rmax: Some(vec![1, 2]),
             corr_interval: Some(3),
             ..Default::default()
         }),
         ..Default::default()
     });
+    assert_eq!(toml_measure_cfg.correlation_rmax, Some(vec![1, 2]));
     assert_eq!(toml_measure_cfg.correlation_interval, 3);
+
+    let correlated_job = ThetaJobConfig {
+        l: vec![16, 32],
+        temperatures: vec![1.0],
+        delta_j_z: vec![0.0],
+        samples: 1,
+        sweeps: 2,
+        binsize: 1,
+        correlation_rmax: Some(vec![8, 16]),
+        correlation_rmax_xy: Some(vec![7, 15]),
+        correlation_rmax_z: Some(vec![6, 14]),
+        ..Default::default()
+    }
+    .make_job()
+    .unwrap();
+    assert_eq!(correlated_job.tasks.len(), 2);
+    assert_eq!(correlated_job.tasks[0].l, 16);
+    assert_eq!(correlated_job.tasks[0].correlation_rmax, 8);
+    assert_eq!(correlated_job.tasks[0].correlation_rmax_xy, 7);
+    assert_eq!(correlated_job.tasks[0].correlation_rmax_z, 6);
+    assert_eq!(correlated_job.tasks[1].l, 32);
+    assert_eq!(correlated_job.tasks[1].correlation_rmax, 16);
+    assert_eq!(correlated_job.tasks[1].correlation_rmax_xy, 15);
+    assert_eq!(correlated_job.tasks[1].correlation_rmax_z, 14);
+
+    assert_err_eq(
+        ThetaJobConfig {
+            l: vec![16, 32],
+            correlation_rmax_xy: Some(vec![16]),
+            ..Default::default()
+        }
+        .make_job(),
+        "corr_rmax_xy must contain exactly one value per lattice size: expected 2, got 1",
+    );
 
     let invalid_duration = ThetaJobConfig::try_from_toml_spec(ThetaJobToml {
         run_time: Some("48:invalid:00".to_string()),
@@ -745,7 +781,7 @@ proposal_width = 0.0
 wolff_steps = 0
 
 [measure]
-corr_rmax = 1
+corr_rmax = [1]
 correlation_interval = 2
 "#,
         output_dir.to_string_lossy()
@@ -761,7 +797,7 @@ correlation_interval = 2
     assert_eq!(cfg.sweeps, 4);
     assert_eq!(cfg.thermalization, 1);
     assert_eq!(cfg.binsize, 2);
-    assert_eq!(cfg.correlation_rmax, Some(1));
+    assert_eq!(cfg.correlation_rmax, Some(vec![1]));
     assert_eq!(cfg.correlation_interval, 2);
     assert_eq!(options.output_dir.as_deref(), Some(output_dir.as_path()));
     assert!(options.checkpoint);
@@ -838,7 +874,7 @@ proposal_width = 0.0
 wolff_steps = 0
 
 [measure]
-corr_rmax = 0
+corr_rmax = [0]
 "#,
         output_dir.to_string_lossy()
     );
@@ -1277,7 +1313,7 @@ proposal_width = 0.0
 wolff_steps = 0
 
 [measure]
-corr_rmax = 0
+corr_rmax = [0]
 "#,
         mpi_out.to_string_lossy()
     );

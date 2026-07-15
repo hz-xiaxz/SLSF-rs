@@ -27,5 +27,5 @@ wolff_steps = 1
 
 [measure]
 # Omit these or keep at 0 to disable correlation output.
-corr_rmax_xy = 0
-corr_rmax_z = 0
+corr_rmax_xy = [0, 0, 0, 0, 0, 0, 0, 0, 0]
+corr_rmax_z = [0, 0, 0, 0, 0, 0, 0, 0, 0]

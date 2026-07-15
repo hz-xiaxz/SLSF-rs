@@ -121,19 +121,6 @@ where
     })
 }
 
-fn parse_optional_env_value<T>(key: &str) -> Result<Option<T>, String>
-where
-    T: std::str::FromStr,
-    T::Err: std::fmt::Display,
-{
-    std::env::var(key).map_or(Ok(None), |value| {
-        value
-            .parse::<T>()
-            .map(Some)
-            .map_err(|err| format!("failed to parse {key}: {err}"))
-    })
-}
-
 fn parse_env_list<T>(key: &str, default: &[T]) -> Result<Vec<T>, String>
 where
     T: Clone + std::str::FromStr,

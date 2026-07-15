@@ -89,6 +89,19 @@ Run `$CTRL status`. If failed or uncertain, run `$CTRL logs`. Do not test or syn
 
 Prefer existing TOML configs and edit or create a new config only when requested parameters do not match one. Before submission, `slsf check --config <path>` must succeed and report the expanded task count and output path.
 
+Treat `[measure]` correlation limits as per-lattice arrays. For every configured or expanded lattice specification, require exactly one value in each present `corr_rmax`, `corr_rmax_xy`, or `corr_rmax_z` array, preserving the same order as `L` (or the expanded `l_x`/`l_y`/`l_z` specifications). Never write a scalar correlation limit and never reuse one lattice's limit for another. For example:
+
+```toml
+[model]
+L = [16, 32]
+
+[measure]
+corr_rmax_xy = [8, 16]
+corr_rmax_z = [8, 16]
+```
+
+Use zero per lattice to disable correlation output, for example `corr_rmax_xy = [0, 0]`. Reject an array-length mismatch before syncing or submitting; rely on `slsf check` as the final validation.
+
 Typical intent:
 
 - Smoke: small samples/sweeps and a bounded wait.

@@ -22,5 +22,5 @@ proposal_width = 3.141592653589793
 wolff_steps = 1
 
 [measure]
-corr_rmax_xy = 0
-corr_rmax_z = 0
+corr_rmax_xy = [0]
+corr_rmax_z = [0]

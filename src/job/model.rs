@@ -370,9 +370,9 @@ pub struct ThetaJobConfig {
     pub binsize: usize,
     pub proposal_width: f64,
     pub wolff_steps: usize,
-    pub correlation_rmax: Option<usize>,
-    pub correlation_rmax_xy: Option<usize>,
-    pub correlation_rmax_z: Option<usize>,
+    pub correlation_rmax: Option<Vec<usize>>,
+    pub correlation_rmax_xy: Option<Vec<usize>>,
+    pub correlation_rmax_z: Option<Vec<usize>>,
     pub correlation_interval: usize,
     pub run_time: Duration,
     pub checkpoint_time: Duration,
@@ -428,9 +428,9 @@ pub struct ThetaRunToml {
 
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct ThetaMeasureToml {
-    pub corr_rmax: Option<usize>,
-    pub corr_rmax_xy: Option<usize>,
-    pub corr_rmax_z: Option<usize>,
+    pub corr_rmax: Option<Vec<usize>>,
+    pub corr_rmax_xy: Option<Vec<usize>>,
+    pub corr_rmax_z: Option<Vec<usize>>,
     pub corr_interval: Option<usize>,
     pub correlation_interval: Option<usize>,
 }
