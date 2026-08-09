@@ -269,6 +269,8 @@ pub struct ThetaCorrelations {
     pub corr_x: Vec<f64>,
     pub corr_y: Vec<f64>,
     pub corr_xy: Vec<f64>,
+    /// In-plane Cxy indexed as `[z][r - 1]`, without averaging over layers.
+    pub corr_xy_by_z: Vec<Vec<f64>>,
     pub corr_z: Vec<f64>,
 }
 
@@ -320,6 +322,8 @@ pub struct ThetaSimulationResult {
     pub corr_x: Vec<f64>,
     pub corr_y: Vec<f64>,
     pub corr_xy: Vec<f64>,
+    /// In-plane Cxy indexed as `[z][r - 1]`, without averaging over layers.
+    pub corr_xy_by_z: Vec<Vec<f64>>,
     pub corr_z: Vec<f64>,
     pub acceptance: f64,
     pub num_measurements: usize,

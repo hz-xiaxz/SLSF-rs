@@ -181,24 +181,28 @@ pub fn measure_theta_correlations_with_scratch(
     let rmax_z_eff = requested_z.min(lattice.l_z / 2);
     let mut corr_x = vec![0.0; rmax_xy_eff];
     let mut corr_y = vec![0.0; rmax_xy_eff];
+    let mut corr_xy_by_z = vec![vec![0.0; rmax_xy_eff]; lattice.l_z];
     let mut corr_z = vec![0.0; rmax_z_eff];
     let volume = lattice.volume() as f64;
+    let layer_area = (lattice.l_x * lattice.l_y) as f64;
 
     for r in 1..=rmax_xy_eff {
         let mut sx = 0.0;
         let mut sy = 0.0;
-        for z in 0..lattice.l_z {
+        for (z, layer_corr) in corr_xy_by_z.iter_mut().enumerate() {
             let z_base = lattice.l_x * lattice.l_y * z;
+            let mut layer_sx = 0.0;
+            let mut layer_sy = 0.0;
             for y in 0..lattice.l_y {
                 let row_start = z_base + lattice.l_x * y;
-                sx += cached_correlation_dot_x8(
+                layer_sx += cached_correlation_dot_x8(
                     &scratch.cos_theta,
                     &scratch.sin_theta,
                     row_start,
                     row_start + r,
                     lattice.l_x - r,
                 );
-                sx += cached_correlation_dot_x8(
+                layer_sx += cached_correlation_dot_x8(
                     &scratch.cos_theta,
                     &scratch.sin_theta,
                     row_start + lattice.l_x - r,
@@ -207,7 +211,7 @@ pub fn measure_theta_correlations_with_scratch(
                 );
 
                 let y_shift = (y + r) % lattice.l_y;
-                sy += cached_correlation_dot_x8(
+                layer_sy += cached_correlation_dot_x8(
                     &scratch.cos_theta,
                     &scratch.sin_theta,
                     row_start,
@@ -215,6 +219,9 @@ pub fn measure_theta_correlations_with_scratch(
                     lattice.l_x,
                 );
             }
+            sx += layer_sx;
+            sy += layer_sy;
+            layer_corr[r - 1] = (layer_sx + layer_sy) / (2.0 * layer_area);
         }
         corr_x[r - 1] = sx / volume;
         corr_y[r - 1] = sy / volume;
@@ -252,6 +259,7 @@ pub fn measure_theta_correlations_with_scratch(
         corr_x,
         corr_y,
         corr_xy,
+        corr_xy_by_z,
         corr_z,
     }
 }

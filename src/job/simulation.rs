@@ -589,8 +589,13 @@ pub(crate) fn run_theta_task_with_checkpoint(
             for (r, value) in corr.r_xy.iter().zip(corr.corr_y) {
                 series.push(format!("CorrY_r{r}"), value);
             }
-            for (r, value) in corr.r_xy.iter().zip(corr.corr_xy) {
-                series.push(format!("CorrXY_r{r}"), value);
+            for (r, value) in corr.r_xy.iter().zip(&corr.corr_xy) {
+                series.push(format!("CorrXY_r{r}"), *value);
+            }
+            for (z, layer_corr) in corr.corr_xy_by_z.iter().enumerate() {
+                for (r, value) in corr.r_xy.iter().zip(layer_corr) {
+                    series.push(format!("CorrXY_z{z}_r{r}"), *value);
+                }
             }
             for (r, value) in corr.r_z.iter().zip(corr.corr_z) {
                 series.push(format!("CorrZ_r{r}"), value);
