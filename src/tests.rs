@@ -131,7 +131,27 @@ fn theta_energy_magnetization_and_correlations() {
     assert_abs_diff_eq!(corr.corr_x[0], 1.0, epsilon = 1e-12);
     assert_abs_diff_eq!(corr.corr_y[0], 1.0, epsilon = 1e-12);
     assert_abs_diff_eq!(corr.corr_xy[0], 1.0, epsilon = 1e-12);
+    assert_eq!(corr.corr_xy_by_z.len(), lat.l_z);
+    assert!(corr
+        .corr_xy_by_z
+        .iter()
+        .all(|layer| layer.len() == 1 && (layer[0] - 1.0).abs() < 1e-12));
     assert_abs_diff_eq!(corr.corr_z[0], 1.0, epsilon = 1e-12);
+
+    for y in 0..lat.l_y {
+        for x in 0..lat.l_x {
+            lat.set(x, y, 1, if (x + y) % 2 == 0 { -1.0 } else { 1.0 });
+        }
+    }
+    let layer_corr = measure_theta_correlations(&lat, Some(1), None, None);
+    assert!((layer_corr.corr_xy_by_z[0][0] - 1.0).abs() < 1e-12);
+    assert!(layer_corr.corr_xy_by_z[1][0] < 0.0);
+    assert!(
+        (layer_corr.corr_xy[0]
+            - (layer_corr.corr_xy_by_z[0][0] + layer_corr.corr_xy_by_z[1][0]) / 2.0)
+            .abs()
+            < 1e-12
+    );
 
     lat.set(0, 0, 0, std::f64::consts::PI);
     let magnetization = measure_magnetization(&lat);
@@ -971,6 +991,16 @@ fn theta_carlo_entrypoint_runs_task_and_roundtrips_result_json() {
     assert_eq!(task_result.observables["Energy"].bin_length, 2);
     assert!(task_result.observables["CorrXY_r1"].mean.is_finite());
     assert_eq!(task_result.observables["CorrXY_r1"].internal_bin_len, 2);
+    assert!(task_result.observables["CorrXY_z0_r1"].mean.is_finite());
+    assert!(task_result.observables["CorrXY_z1_r1"].mean.is_finite());
+    assert_abs_diff_eq!(
+        task_result.observables["CorrXY_r1"].mean,
+        (task_result.observables["CorrXY_z0_r1"].mean
+            + task_result.observables["CorrXY_z1_r1"].mean)
+            / 2.0,
+        epsilon = 1e-12
+    );
+    assert_eq!(task_result.observables["CorrXY_z0_r1"].internal_bin_len, 2);
 
     let mut throttled_task = task_result.task.clone();
     throttled_task.correlation_interval = 2;
@@ -1025,6 +1055,22 @@ fn theta_carlo_entrypoint_runs_task_and_roundtrips_result_json() {
         assert_eq!(sample_dataset.shape().unwrap(), vec![samples.len() as u64]);
         assert_eq!(sample_dataset.dtype().unwrap().to_string(), "f64");
         assert_eq!(sample_dataset.read_f64().unwrap(), *samples);
+    }
+
+    for name in ["CorrXY_z0_r1", "CorrXY_z1_r1"] {
+        let cxy_z_group = h5.group(&format!("observables/{name}")).unwrap();
+        assert_eq!(
+            cxy_z_group.dataset("samples").unwrap().read_f64().unwrap(),
+            result.tasks[0].measurement_bins[name]
+        );
+        assert_eq!(
+            cxy_z_group
+                .dataset("bin_length")
+                .unwrap()
+                .read_i64()
+                .unwrap(),
+            vec![result.tasks[0].observables[name].internal_bin_len as i64]
+        );
     }
 
     let version_group = h5.group("version").unwrap();

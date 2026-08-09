@@ -76,6 +76,7 @@ pub fn run_theta_simulation<R: Rng + ?Sized>(
     let mut corr_x_sum = vec![0.0; corr_rmax_xy_eff];
     let mut corr_y_sum = vec![0.0; corr_rmax_xy_eff];
     let mut corr_xy_sum = vec![0.0; corr_rmax_xy_eff];
+    let mut corr_xy_by_z_sum = vec![vec![0.0; corr_rmax_xy_eff]; lattice.l_z];
     let mut corr_z_sum = vec![0.0; corr_rmax_z_eff];
     let mut corr_measurements = 0usize;
 
@@ -118,6 +119,11 @@ pub fn run_theta_simulation<R: Rng + ?Sized>(
                     corr_x_sum[i] += corr.corr_x[i];
                     corr_y_sum[i] += corr.corr_y[i];
                     corr_xy_sum[i] += corr.corr_xy[i];
+                }
+                for (layer_sum, layer_corr) in corr_xy_by_z_sum.iter_mut().zip(corr.corr_xy_by_z) {
+                    for (sum, value) in layer_sum.iter_mut().zip(layer_corr) {
+                        *sum += value;
+                    }
                 }
                 for (sum, value) in corr_z_sum.iter_mut().zip(corr.corr_z) {
                     *sum += value;
@@ -173,6 +179,10 @@ pub fn run_theta_simulation<R: Rng + ?Sized>(
         corr_x: corr_x_sum.into_iter().map(|v| v / corr_norm).collect(),
         corr_y: corr_y_sum.into_iter().map(|v| v / corr_norm).collect(),
         corr_xy: corr_xy_sum.into_iter().map(|v| v / corr_norm).collect(),
+        corr_xy_by_z: corr_xy_by_z_sum
+            .into_iter()
+            .map(|layer| layer.into_iter().map(|v| v / corr_norm).collect())
+            .collect(),
         corr_z: corr_z_sum.into_iter().map(|v| v / corr_norm).collect(),
         acceptance: if acceptance_count == 0 {
             0.0
