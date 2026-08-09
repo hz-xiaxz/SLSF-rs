@@ -260,38 +260,6 @@ impl ThetaJob {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct JobAssignment {
-    pub rank: usize,
-    pub world_size: usize,
-}
-
-impl JobAssignment {
-    pub fn new(rank: usize, world_size: usize) -> Result<Self, String> {
-        if world_size == 0 {
-            return Err("world_size must be positive".to_string());
-        }
-        if rank >= world_size {
-            return Err("rank must be smaller than world_size".to_string());
-        }
-        Ok(Self { rank, world_size })
-    }
-
-    pub fn single() -> Self {
-        Self {
-            rank: 0,
-            world_size: 1,
-        }
-    }
-
-    pub fn from_env() -> Result<Self, String> {
-        Self::new(
-            mpi_env_rank().unwrap_or(0),
-            mpi_env_world_size().unwrap_or(1),
-        )
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ThetaTaskResult {
     pub task: ThetaTask,

@@ -23,6 +23,8 @@ use crate::types::{
 };
 use crate::updates::{metropolis_sweep_with_scratch, wolff_cluster_step_with_theta_scratch};
 
+pub use carlo_mc::*;
+
 include!("job/model.rs");
 include!("job/cli.rs");
 include!("job/config.rs");
