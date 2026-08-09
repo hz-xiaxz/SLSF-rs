@@ -1,0 +1,19 @@
+[package]
+name = "carlo-mc"
+version = "0.1.0"
+edition = "2021"
+description = "A model-independent framework for deterministic, resumable Monte Carlo jobs"
+repository = "https://github.com/hz-xiaxz/SLSF-rs"
+license = "MIT"
+keywords = ["monte-carlo", "simulation", "checkpoint", "statistics", "reproducibility"]
+categories = ["science", "simulation"]
+include = ["Cargo.toml", "generic.rs"]
+
+[lib]
+name = "carlo_mc"
+path = "generic.rs"
+
+[dependencies]
+rand = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

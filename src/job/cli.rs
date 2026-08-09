@@ -53,7 +53,7 @@ impl ThetaRunOptions {
     }
 
     fn assignment(&self) -> Result<JobAssignment, String> {
-        JobAssignment::new(self.rank(), self.world_size())
+        JobAssignment::new(self.rank(), self.world_size()).map_err(|error| error.to_string())
     }
 }
 

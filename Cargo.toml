@@ -1,3 +1,8 @@
+[workspace]
+members = ["src/job"]
+default-members = ["."]
+resolver = "2"
+
 [package]
 name = "slsf"
 version = "0.1.0"
@@ -10,6 +15,7 @@ default = []
 profile-stats = []
 
 [dependencies]
+carlo-mc = { path = "src/job" }
 clap = { version = "4", features = ["derive"] }
 hdf5-pure = "0.21"
 rand = "0.10"
