@@ -23,7 +23,42 @@ use crate::types::{
 };
 use crate::updates::{metropolis_sweep_with_scratch, wolff_cluster_step_with_theta_scratch};
 
+#[cfg(feature = "carlo-mc")]
 pub use carlo_mc::*;
+
+#[cfg(not(feature = "carlo-mc"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JobAssignment {
+    pub rank: usize,
+    pub world_size: usize,
+}
+
+#[cfg(not(feature = "carlo-mc"))]
+impl JobAssignment {
+    pub fn new(rank: usize, world_size: usize) -> Result<Self, String> {
+        if world_size == 0 {
+            return Err("world_size must be positive".to_string());
+        }
+        if rank >= world_size {
+            return Err("rank must be smaller than world_size".to_string());
+        }
+        Ok(Self { rank, world_size })
+    }
+
+    pub fn single() -> Self {
+        Self {
+            rank: 0,
+            world_size: 1,
+        }
+    }
+
+    pub fn from_env() -> Result<Self, String> {
+        Self::new(
+            mpi_env_rank().unwrap_or(0),
+            mpi_env_world_size().unwrap_or(1),
+        )
+    }
+}
 
 include!("job/model.rs");
 include!("job/cli.rs");

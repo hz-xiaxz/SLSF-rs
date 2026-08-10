@@ -1,5 +1,8 @@
 #![feature(portable_simd)]
 
+#[cfg(feature = "carlo-mc")]
+pub use carlo_mc;
+
 pub(crate) mod fast_math;
 pub mod initialization;
 pub mod job;
