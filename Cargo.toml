@@ -11,7 +11,7 @@ carlo-mc = ["dep:carlo-mc"]
 profile-stats = []
 
 [dependencies]
-carlo-mc = { path = "../carlo-mc", optional = true }
+carlo-mc = { git = "https://github.com/hz-xiaxz/carlo-mc.git", rev = "3547ec9ca25e98f1d45225d9008e03023aab6cc2", optional = true }
 clap = { version = "4", features = ["derive"] }
 hdf5-pure = "0.21"
 rand = "0.10"
