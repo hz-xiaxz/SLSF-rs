@@ -1,11 +1,12 @@
 use std::convert::Infallible;
 
 use rand::{SeedableRng, TryRng};
+use serde::{Deserialize, Serialize};
 
 pub const TWO_PI: f64 = std::f64::consts::PI * 2.0;
 const SPLITMIX64_GAMMA: u64 = 0x9E37_79B9_7F4A_7C15;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FastRng {
     seed: u64,
     state: u64,
@@ -80,7 +81,7 @@ impl TryRng for FastRng {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Parameters {
     pub j_xy: f64,
     pub j_z_mean: f64,
@@ -105,7 +106,7 @@ pub enum InitMode {
     Cold,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThetaLattice {
     pub l_x: usize,
     pub l_y: usize,
@@ -159,7 +160,7 @@ impl ThetaLattice {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThetaScratch {
     pub(crate) sin_theta: Vec<f64>,
     pub(crate) cos_theta: Vec<f64>,
@@ -212,7 +213,7 @@ impl ThetaScratch {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WolffScratch {
     pub(crate) in_cluster: Vec<bool>,
     pub(crate) stack: Vec<(usize, usize, usize)>,

@@ -1,3 +1,145 @@
+use std::ffi::OsString;
+use std::path::PathBuf;
+
+use clap::{error::ErrorKind, Args as ClapArgs, Parser, Subcommand};
+use carlo_mc::*;
+
+use crate::model::*;
+use crate::results::*;
+
+
+
+impl ThetaRunOptions {
+    fn with_overrides(mut self, args: &CommandArgs) -> Self {
+        if let Some(value) = &args.output_dir {
+            self.output_dir = Some(value.clone());
+        }
+        if let Some(value) = &args.output_file {
+            self.output_file = Some(value.clone());
+        }
+        if let Some(value) = &args.merged_output_file {
+            self.merged_output_file = Some(value.clone());
+        }
+        if let Some(value) = &args.measurement_dir {
+            self.measurement_dir = Some(value.clone());
+        }
+        if let Some(value) = &args.checkpoint_dir {
+            self.checkpoint_dir = Some(value.clone());
+        }
+        if let Some(value) = &args.scheduler_dir {
+            self.scheduler_dir = Some(value.clone());
+        }
+        if args.checkpoint {
+            self.checkpoint = true;
+        }
+        if args.restart {
+            self.restart = true;
+        }
+        if args.single {
+            self.single = true;
+            self.rank = Some(0);
+            self.world_size = Some(1);
+        }
+        if let Some(value) = args.rank {
+            self.rank = Some(value);
+        }
+        if let Some(value) = args.world_size {
+            self.world_size = Some(value);
+        }
+        self
+    }
+
+    pub(crate) fn rank(&self) -> usize {
+        if self.single {
+            return 0;
+        }
+        self.rank.or_else(mpi_env_rank).unwrap_or(0)
+    }
+
+    pub(crate) fn world_size(&self) -> usize {
+        if self.single {
+            return 1;
+        }
+        self.world_size.or_else(mpi_env_world_size).unwrap_or(1)
+    }
+
+    pub(crate) fn assignment(&self) -> Result<JobAssignment, String> {
+        JobAssignment::new(self.rank(), self.world_size()).map_err(|error| error.to_string())
+    }
+}
+
+#[derive(Debug, Parser)]
+#[command(author, version, about = "Rust XY/Theta job runner")]
+pub struct ThetaCli {
+    #[command(subcommand)]
+    command: Option<ThetaCommand>,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ThetaCommand {
+    #[command(alias = "r")]
+    Run(CommandArgs),
+    #[command(alias = "m")]
+    Merge(CommandArgs),
+    Check(CommandArgs),
+    RunMerge(CommandArgs),
+    RunDynamic(CommandArgs),
+    MpiRun(CommandArgs),
+    Checkpoint(CommandArgs),
+    #[command(alias = "df")]
+    Dataframe(ResultToolArgs),
+    #[command(alias = "s")]
+    Status(CommandArgs),
+    #[command(alias = "d")]
+    Delete(CommandArgs),
+}
+
+#[derive(Debug, Clone, Default, ClapArgs)]
+pub struct CommandArgs {
+    #[arg(short, long)]
+    pub config: Option<PathBuf>,
+    #[arg(long)]
+    pub from_env: bool,
+    #[arg(long)]
+    pub output_dir: Option<PathBuf>,
+    #[arg(long)]
+    pub output_file: Option<PathBuf>,
+    #[arg(long)]
+    pub merged_output_file: Option<PathBuf>,
+    #[arg(long)]
+    pub measurement_dir: Option<PathBuf>,
+    #[arg(long)]
+    pub checkpoint_dir: Option<PathBuf>,
+    #[arg(long)]
+    pub scheduler_dir: Option<PathBuf>,
+    #[arg(long)]
+    pub checkpoint: bool,
+    #[arg(short, long)]
+    pub single: bool,
+    #[arg(short, long)]
+    pub restart: bool,
+    #[arg(long)]
+    pub rank: Option<usize>,
+    #[arg(long)]
+    pub world_size: Option<usize>,
+}
+
+#[derive(Debug, Clone, ClapArgs)]
+pub struct ResultToolArgs {
+    pub result_json: PathBuf,
+    #[arg(short, long)]
+    pub output: Option<PathBuf>,
+    #[arg(long)]
+    pub plot: bool,
+    #[arg(long, default_value = "Energy")]
+    pub observable: String,
+    #[arg(long)]
+    pub plot_output: Option<PathBuf>,
+    #[arg(long)]
+    pub script_output: Option<PathBuf>,
+}
+
+
 pub fn run_theta_job_command_from_env(args: &[String]) -> Result<String, String> {
     run_theta_job_command(
         std::iter::once(OsString::from("slsf")).chain(args.iter().map(OsString::from)),
@@ -33,7 +175,7 @@ fn run_theta_command(command: ThetaCommand) -> Result<String, String> {
     match command {
         ThetaCommand::Run(args) => {
             let (cfg, options) = load_config_and_options(&args)?;
-            let summary = run_theta_job_with_options(&cfg, options)?;
+            let summary = run_theta_job_with_carlo(&cfg, options)?;
             Ok(format!(
                 "completed {} theta task(s) in {:.3}s; wrote {}",
                 summary.task_count,
@@ -43,7 +185,7 @@ fn run_theta_command(command: ThetaCommand) -> Result<String, String> {
         }
         ThetaCommand::Merge(args) => {
             let (cfg, options) = load_config_and_options(&args)?;
-            let summary = merge_theta_job_with_options(&cfg, options)?;
+            let summary = merge_theta_job_with_carlo(&cfg, options)?;
             Ok(format!(
                 "merged {} rank file(s), {} theta task(s); wrote {}",
                 summary.input_paths.len(),
@@ -73,8 +215,8 @@ fn run_theta_command(command: ThetaCommand) -> Result<String, String> {
         }
         ThetaCommand::RunMerge(args) => {
             let (cfg, options) = load_config_and_options(&args)?;
-            let run = run_theta_job_with_options(&cfg, options.clone())?;
-            let merge = merge_theta_job_with_options(&cfg, options)?;
+            let run = run_theta_job_with_carlo(&cfg, options.clone())?;
+            let merge = merge_theta_job_with_carlo(&cfg, options)?;
             Ok(format!(
                 "completed {} theta task(s) in {:.3}s; wrote {}; merged {} rank file(s) into {}",
                 run.task_count,
@@ -86,18 +228,17 @@ fn run_theta_command(command: ThetaCommand) -> Result<String, String> {
         }
         ThetaCommand::RunDynamic(args) => {
             let (cfg, options) = load_config_and_options(&args)?;
-            let summary = run_theta_job_dynamic_with_options(&cfg, options)?;
+            let summary = run_theta_job_dynamic_with_carlo(&cfg, options)?;
             Ok(format!(
-                "dynamically completed {} theta task(s) in {:.3}s; wrote {}; checkpoints {}",
+                "dynamically completed {} theta task(s) in {:.3}s; wrote {}",
                 summary.task_count,
                 summary.elapsed_seconds,
-                summary.output_path.display(),
-                summary.checkpoint_paths.len()
+                summary.output_path.display()
             ))
         }
         ThetaCommand::MpiRun(args) => {
             let (cfg, options) = load_config_and_options(&args)?;
-            let summary = run_theta_job_mpi_with_options(&cfg, options)?;
+            let summary = run_theta_job_mpi_with_carlo(&cfg, options)?;
             let merge_message = summary
                 .merge
                 .as_ref()
@@ -121,20 +262,20 @@ fn run_theta_command(command: ThetaCommand) -> Result<String, String> {
         }
         ThetaCommand::Checkpoint(args) => {
             let (cfg, options) = load_config_and_options(&args)?;
-            let job = cfg.make_job()?;
-            let assignment = options.assignment()?;
-            let result = run_theta_job(&job, assignment)?;
-            let dir = options
-                .checkpoint_dir
-                .clone()
-                .unwrap_or_else(|| default_measurement_dir_with_options(&job.name, &options));
-            let paths = write_theta_job_checkpoints(&result, dir)?;
-            Ok(format!("wrote {} checkpoint file(s)", paths.len()))
+            let mut checkpoint_options = options.clone();
+            checkpoint_options.checkpoint = true;
+            let summary = run_theta_job_with_carlo(&cfg, checkpoint_options)?;
+            Ok(format!(
+                "completed {} theta task(s) in {:.3}s; wrote {}",
+                summary.task_count,
+                summary.elapsed_seconds,
+                summary.output_path.display()
+            ))
         }
         ThetaCommand::Dataframe(args) => run_result_tool_command(args),
         ThetaCommand::Status(args) => {
             let (cfg, options) = load_config_and_options(&args)?;
-            theta_job_status(&cfg, &options)
+            theta_job_status_with_carlo(&cfg, &options)
         }
         ThetaCommand::Delete(args) => {
             let (cfg, options) = load_config_and_options(&args)?;
@@ -156,7 +297,6 @@ fn run_result_tool_command(args: ResultToolArgs) -> Result<String, String> {
             ))
     });
     crate::result_tools::write_dataframe(&args.result_json, &table_path)?;
-
     if args.plot {
         let plot_path = args
             .plot_output
