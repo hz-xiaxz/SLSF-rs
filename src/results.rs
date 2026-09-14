@@ -30,8 +30,12 @@ pub fn write_theta_job_result_to_path(
     if let Some(parent) = path.as_ref().parent() {
         fs::create_dir_all(parent).map_err(|err| err.to_string())?;
     }
-    let file = File::create(&path).map_err(|err| err.to_string())?;
+    // Write to a temporary file and rename so that a concurrent reader (rank 0
+    // waiting to merge) never sees a partially written result.
+    let tmp = path.as_ref().with_extension(format!("tmp.{}", std::process::id()));
+    let file = File::create(&tmp).map_err(|err| err.to_string())?;
     serde_json::to_writer_pretty(BufWriter::new(file), result).map_err(|err| err.to_string())?;
+    fs::rename(&tmp, &path).map_err(|err| err.to_string())?;
     Ok(path.as_ref().to_path_buf())
 }
 
@@ -324,6 +328,9 @@ pub fn run_theta_job_mpi_with_carlo(
         run_theta_job_dynamic_with_carlo(cfg, options.clone())?
     };
     let merge = if !single && world_size > 1 && rank == 0 {
+        // mpi-run has no barrier: rank 0 may finish long before the other ranks,
+        // so wait for every rank result file before merging.
+        wait_for_rank_results(cfg, &options, world_size)?;
         Some(merge_theta_job_with_carlo(cfg, options.clone())?)
     } else {
         None
@@ -334,6 +341,30 @@ pub fn run_theta_job_mpi_with_carlo(
         rank,
         world_size,
     })
+}
+
+fn wait_for_rank_results(
+    cfg: &ThetaJobConfig,
+    options: &ThetaRunOptions,
+    world_size: usize,
+) -> Result<(), String> {
+    let paths: Vec<PathBuf> = (0..world_size)
+        .map(|rank| rank_result_path_with_options(&cfg.job_name, rank, options))
+        .collect();
+    let started = Instant::now();
+    let poll = std::time::Duration::from_secs(5);
+    loop {
+        let missing = paths.iter().filter(|p| !p.exists()).count();
+        if missing == 0 {
+            return Ok(());
+        }
+        if started.elapsed() > cfg.run_time {
+            return Err(format!(
+                "timed out waiting for {missing} of {world_size} rank result file(s) before merge"
+            ));
+        }
+        std::thread::sleep(poll);
+    }
 }
 
 fn remove_path_if_exists(path: &Path) -> Result<(), String> {

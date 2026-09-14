@@ -4,6 +4,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=64
 #SBATCH --cpus-per-task=1
+#SBATCH --exclude=wqd10nbe13c08
 #SBATCH --time=48:00:00
 #SBATCH --output=runs/slurm-%x-%j.out
 #SBATCH --error=runs/slurm-%x-%j.err
