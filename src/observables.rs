@@ -269,9 +269,9 @@ pub fn measure_layer_magnetization(lattice: &ThetaLattice) -> LayerMagnetization
     measure_layer_magnetization_with_scratch(lattice, &scratch)
 }
 
-/// Per-layer magnetization vectors and the correlation `G(r)` between layer order
-/// parameters along the stacking direction. `G(0)` is the mean of `|m_z|^2`, and the
-/// global magnetization squared equals `(1/L_z) sum_{r=0}^{L_z-1} G(r)`.
+/// Per-layer magnetization vectors and the raw products `m_z . m_{z+r}` between layer
+/// order parameters along the stacking direction. The global magnetization squared equals
+/// `(1/L_z^2) sum_z sum_{r=0}^{L_z-1} m_z . m_{z+r}`.
 pub fn measure_layer_magnetization_with_scratch(
     lattice: &ThetaLattice,
     scratch: &ThetaScratch,
@@ -293,37 +293,18 @@ pub fn measure_layer_magnetization_with_scratch(
 
     let l_z = lattice.l_z;
     let rmax = l_z / 2;
-    let j_max = lattice
-        .j_xy
-        .iter()
-        .copied()
-        .fold(f64::NEG_INFINITY, f64::max);
-    let strong: Vec<bool> = lattice.j_xy.iter().map(|&j| j == j_max).collect();
+    let pair = (0..l_z)
+        .map(|z| {
+            (0..=rmax)
+                .map(|r| {
+                    let w = (z + r) % l_z;
+                    m[z].0 * m[w].0 + m[z].1 * m[w].1
+                })
+                .collect()
+        })
+        .collect();
 
-    let mut corr = vec![0.0; rmax + 1];
-    let mut corr_strong = vec![None; rmax + 1];
-    for r in 0..=rmax {
-        let mut sum = 0.0;
-        let mut strong_sum = 0.0;
-        let mut strong_pairs = 0usize;
-        for z in 0..l_z {
-            let w = (z + r) % l_z;
-            let dot = m[z].0 * m[w].0 + m[z].1 * m[w].1;
-            sum += dot;
-            if strong[z] && strong[w] {
-                strong_sum += dot;
-                strong_pairs += 1;
-            }
-        }
-        corr[r] = sum / l_z as f64;
-        corr_strong[r] = (strong_pairs > 0).then(|| strong_sum / strong_pairs as f64);
-    }
-
-    LayerMagnetization {
-        m,
-        corr,
-        corr_strong,
-    }
+    LayerMagnetization { m, pair }
 }
 
 pub fn helicity_sums(

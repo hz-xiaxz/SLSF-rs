@@ -153,7 +153,7 @@ fn theta_energy_magnetization_and_correlations() {
 }
 
 #[test]
-fn layer_magnetization_and_interlayer_correlation() {
+fn layer_magnetization_and_interlayer_products() {
     let mut rng = FastRng::seed_from_u64(5);
     let mut lat = ThetaLattice::new(4, 4, 5).unwrap();
     let params = Parameters::new(1.5, 0.5, 0.0, 1.0);
@@ -163,12 +163,10 @@ fn layer_magnetization_and_interlayer_correlation() {
     // Cold start: every layer fully ordered and aligned.
     let cold = measure_layer_magnetization(&lat);
     assert_eq!(cold.m.len(), 5);
-    assert_eq!(cold.corr.len(), 3);
-    assert!(cold.m.iter().all(|&(mx, my)| (mx * mx + my * my - 1.0).abs() < 1e-12));
-    assert!(cold.corr.iter().all(|g| (g - 1.0).abs() < 1e-12));
+    assert!(cold.pair.iter().all(|row| row.len() == 3));
+    assert!(cold.pair.iter().flatten().all(|v| (v - 1.0).abs() < 1e-12));
 
-    // Rotate each layer rigidly by a different angle: layer order stays 1,
-    // interlayer correlation becomes cos of the angle difference.
+    // Rotate each layer rigidly: |m_z|^2 stays 1, products become cos of angle differences.
     let angles = [0.0, 0.3, 1.1, 2.0, -0.7];
     for (z, &a) in angles.iter().enumerate() {
         for y in 0..lat.l_y {
@@ -178,28 +176,32 @@ fn layer_magnetization_and_interlayer_correlation() {
         }
     }
     let rotated = measure_layer_magnetization(&lat);
-    assert!(rotated.m.iter().all(|&(mx, my)| (mx * mx + my * my - 1.0).abs() < 1e-12));
-    let expected_g1: f64 =
-        (0..5).map(|z| (angles[z] - angles[(z + 1) % 5]).cos()).sum::<f64>() / 5.0;
-    assert_abs_diff_eq!(rotated.corr[1], expected_g1, epsilon = 1e-12);
+    for z in 0..5 {
+        assert_abs_diff_eq!(rotated.pair[z][0], 1.0, epsilon = 1e-12);
+        for r in 1..3 {
+            let expected = (angles[z] - angles[(z + r) % 5]).cos();
+            assert_abs_diff_eq!(rotated.pair[z][r], expected, epsilon = 1e-12);
+        }
+    }
 
-    // Random angles: the global M^2 equals (1/L_z) sum over all separations of G(r).
+    // Random angles: global M^2 is recovered from the stored products (r and L_z - r).
     initialize_angles(&mut lat, InitMode::Random, &mut rng).unwrap();
     let random = measure_layer_magnetization(&lat);
     let l_z = lat.l_z;
-    let g = |r: usize| random.corr[r.min(l_z - r)];
-    let from_layers: f64 = (0..l_z).map(g).sum::<f64>() / l_z as f64;
+    let product = |z: usize, r: usize| {
+        if r <= l_z / 2 {
+            random.pair[z][r]
+        } else {
+            random.pair[(z + r) % l_z][l_z - r]
+        }
+    };
+    let from_layers: f64 = (0..l_z)
+        .flat_map(|z| (0..l_z).map(move |r| (z, r)))
+        .map(|(z, r)| product(z, r))
+        .sum::<f64>()
+        / (l_z * l_z) as f64;
     let obs = measure_theta_observables(&lat, &params);
     assert_abs_diff_eq!(from_layers, obs.magnetization_squared, epsilon = 1e-12);
-
-    // Strong-pair restriction only uses layers with the largest coupling.
-    let j_max = lat.j_xy.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-    let strong: Vec<usize> = (0..l_z).filter(|&z| lat.j_xy[z] == j_max).collect();
-    let dot = |a: usize, b: usize| {
-        random.m[a].0 * random.m[b].0 + random.m[a].1 * random.m[b].1
-    };
-    let expected_strong0 = strong.iter().map(|&z| dot(z, z)).sum::<f64>() / strong.len() as f64;
-    assert_abs_diff_eq!(random.corr_strong[0].unwrap(), expected_strong0, epsilon = 1e-12);
 }
 
 #[test]

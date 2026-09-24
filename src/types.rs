@@ -275,16 +275,14 @@ pub struct ThetaCorrelations {
     pub corr_z: Vec<f64>,
 }
 
-/// Layer-resolved magnetization and correlations between the layer order parameters.
+/// Layer-resolved magnetization and raw products between the layer order parameters.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LayerMagnetization {
     /// In-plane magnetization vector `(m_x, m_y)` of each layer, averaged over its sites.
     pub m: Vec<(f64, f64)>,
-    /// `G(r) = (1/L_z) sum_z m_z . m_{z+r}` (periodic in z) for `r = 0..=L_z/2`.
-    pub corr: Vec<f64>,
-    /// `G(r)` restricted to pairs whose two layers both carry the largest in-plane
-    /// coupling of the stack; `None` when no such pair exists at that separation.
-    pub corr_strong: Vec<Option<f64>>,
+    /// `pair[z][r] = m_z . m_{(z+r) mod L_z}` for `r = 0..=L_z/2`; `pair[z][0] = |m_z|^2`.
+    /// Kept per layer so any grouping (by coupling, by layer) is done in post-processing.
+    pub pair: Vec<Vec<f64>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
