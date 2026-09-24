@@ -8,7 +8,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::initialization::{initialize_angles, initialize_two_point_layer_disorder};
 use crate::observables::{
-    measure_theta_correlations_with_scratch, measure_theta_observables_with_scratch,
+    measure_layer_magnetization_with_scratch, measure_theta_correlations_with_scratch,
+    measure_theta_observables_with_scratch,
 };
 use crate::types::{
     FastRng, InitMode, Parameters, ThetaLattice, ThetaObservables, ThetaScratch, WolffScratch,
@@ -407,6 +408,18 @@ impl MonteCarlo for ThetaModel {
         context.measure("Energy", obs.energy)?;
         context.measure("EnergySquared", obs.energy.powi(2))?;
         context.measure("MagnetizationSquared", obs.magnetization_squared)?;
+        let layers = measure_layer_magnetization_with_scratch(&self.lattice, &self.theta_scratch);
+        for (z, (mx, my)) in layers.m.iter().enumerate() {
+            context.measure(format!("LayerM2_z{z}"), mx * mx + my * my)?;
+        }
+        for (r, value) in layers.corr.iter().enumerate() {
+            context.measure(format!("LayerCorr_r{r}"), *value)?;
+        }
+        for (r, value) in layers.corr_strong.iter().enumerate() {
+            if let Some(value) = value {
+                context.measure(format!("LayerCorrStrong_r{r}"), *value)?;
+            }
+        }
         if (self.corr_rmax_xy > 0 || self.corr_rmax_z > 0)
             && self.measurement_count.is_multiple_of(self.correlation_interval)
         {

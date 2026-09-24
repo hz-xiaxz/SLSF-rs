@@ -1,8 +1,8 @@
 use std::simd::{num::SimdFloat, Simd};
 
 use crate::types::{
-    angle_diff, plus, validate_temperature, Parameters, ThetaCorrelations, ThetaLattice,
-    ThetaObservables, ThetaScratch,
+    angle_diff, plus, validate_temperature, LayerMagnetization, Parameters, ThetaCorrelations,
+    ThetaLattice, ThetaObservables, ThetaScratch,
 };
 
 #[inline]
@@ -261,6 +261,68 @@ pub fn measure_theta_correlations_with_scratch(
         corr_xy,
         corr_xy_by_z,
         corr_z,
+    }
+}
+
+pub fn measure_layer_magnetization(lattice: &ThetaLattice) -> LayerMagnetization {
+    let scratch = ThetaScratch::new(lattice);
+    measure_layer_magnetization_with_scratch(lattice, &scratch)
+}
+
+/// Per-layer magnetization vectors and the correlation `G(r)` between layer order
+/// parameters along the stacking direction. `G(0)` is the mean of `|m_z|^2`, and the
+/// global magnetization squared equals `(1/L_z) sum_{r=0}^{L_z-1} G(r)`.
+pub fn measure_layer_magnetization_with_scratch(
+    lattice: &ThetaLattice,
+    scratch: &ThetaScratch,
+) -> LayerMagnetization {
+    scratch
+        .validate(lattice)
+        .expect("theta scratch dimensions must match lattice dimensions");
+
+    let area = lattice.l_x * lattice.l_y;
+    let inv_area = 1.0 / area as f64;
+    let m: Vec<(f64, f64)> = (0..lattice.l_z)
+        .map(|z| {
+            let start = z * area;
+            let cos_sum: f64 = scratch.cos_theta[start..start + area].iter().sum();
+            let sin_sum: f64 = scratch.sin_theta[start..start + area].iter().sum();
+            (cos_sum * inv_area, sin_sum * inv_area)
+        })
+        .collect();
+
+    let l_z = lattice.l_z;
+    let rmax = l_z / 2;
+    let j_max = lattice
+        .j_xy
+        .iter()
+        .copied()
+        .fold(f64::NEG_INFINITY, f64::max);
+    let strong: Vec<bool> = lattice.j_xy.iter().map(|&j| j == j_max).collect();
+
+    let mut corr = vec![0.0; rmax + 1];
+    let mut corr_strong = vec![None; rmax + 1];
+    for r in 0..=rmax {
+        let mut sum = 0.0;
+        let mut strong_sum = 0.0;
+        let mut strong_pairs = 0usize;
+        for z in 0..l_z {
+            let w = (z + r) % l_z;
+            let dot = m[z].0 * m[w].0 + m[z].1 * m[w].1;
+            sum += dot;
+            if strong[z] && strong[w] {
+                strong_sum += dot;
+                strong_pairs += 1;
+            }
+        }
+        corr[r] = sum / l_z as f64;
+        corr_strong[r] = (strong_pairs > 0).then(|| strong_sum / strong_pairs as f64);
+    }
+
+    LayerMagnetization {
+        m,
+        corr,
+        corr_strong,
     }
 }
 
