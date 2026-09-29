@@ -86,12 +86,12 @@ pub fn write_theta_task_measurements_to_path(
             .create_dataset("bin_length")
             .with_i64_data(&[observable.internal_bin_len as i64])
             .with_shape(&[]);
+        // Contiguous: the file is written once, and each observable has far
+        // fewer bins than a chunk would hold, so chunks are mostly padding.
         observable_group
             .create_dataset("samples")
             .with_f64_data(samples)
-            .with_shape(&[samples.len() as u64])
-            .with_maxshape(&[u64::MAX])
-            .with_chunks(&[1000]);
+            .with_shape(&[samples.len() as u64]);
         observables_group.add_group(observable_group.finish());
     }
     builder.add_group(observables_group.finish());

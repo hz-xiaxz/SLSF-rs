@@ -655,7 +655,25 @@ fn theta_carlo_runner_writes_master_compatible_result() {
     assert!(task.observables.contains_key("Magnetization"));
     assert!(task.observables["Energy"].mean.is_finite());
     assert!(task.observables["RhoXY"].mean.is_finite());
-    assert!(output_dir.join("carlo_unit.data/task0001/run0001.meas.h5").exists());
+    let meas_path = output_dir.join("carlo_unit.data/task0001/run0001.meas.h5");
+    let meas = hdf5_pure::File::open(&meas_path).unwrap();
+    let names = meas.group("observables").unwrap().groups().unwrap();
+    assert!(names.contains(&"Energy".to_string()));
+    let mut sample_bytes = 0;
+    for name in &names {
+        let samples = meas
+            .dataset(&format!("observables/{name}/samples"))
+            .unwrap()
+            .read_f64()
+            .unwrap();
+        assert!(!samples.is_empty());
+        sample_bytes += samples.len() * std::mem::size_of::<f64>();
+    }
+    // Each observable holds only a few bins; a fixed 1000-element chunk per
+    // dataset would make the file mostly zero padding.
+    let file_bytes = fs::metadata(&meas_path).unwrap().len() as usize;
+    eprintln!("meas.h5: {file_bytes} bytes, {sample_bytes} sample bytes, {} observables", names.len());
+    assert!(file_bytes < sample_bytes + names.len() * 2048);
 
     fs::remove_dir_all(root).unwrap();
 }
